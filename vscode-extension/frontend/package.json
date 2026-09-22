@@ -1,0 +1,57 @@
+{
+  "name": "rationale-ext",
+  "displayName": "Rationale",
+  "description": "Look up the reconstructed justification for a commit or code span.",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "rationale.explainSelection",
+        "title": "Rationale: Explain Selection"
+      },
+      {
+        "command": "rationale.explainCommit",
+        "title": "Rationale: Explain Commit..."
+      },
+      {
+        "command": "rationale.search",
+        "title": "Rationale: Search Notes..."
+      }
+    ],
+    "configuration": {
+      "title": "Rationale",
+      "properties": {
+        "rationale.backend.command": {
+          "type": "string",
+          "default": "rationale-backend",
+          "description": "Command used to launch the Python backend (must be on PATH, or an absolute path)."
+        },
+        "rationale.backend.port": {
+          "type": "number",
+          "default": 0,
+          "description": "Localhost port the backend listens on. 0 picks a free port automatically."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "vscode:prepublish": "npm run package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}

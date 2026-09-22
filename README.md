@@ -60,6 +60,12 @@ Run commands from the repository root (`finegrained-rationale/`).
 
 ## Running the pipeline
 
+### VS Code extension
+
+The `vscode-extension/` directory contains a VS Code extension that runs the ARGUS single-commit pipeline. It creates a private Python environment on first use and saves results in VS Code global storage. See [the extension README](vscode-extension/README.md) for setup and packaging instructions. GitHub Actions installs the Python dependencies on Linux, macOS, and Windows and packages platform-targeted VSIX files.
+
+### Command-line scripts
+
 The pipeline is ordered as follows:
 
 ```bash

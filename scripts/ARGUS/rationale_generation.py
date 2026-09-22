@@ -5,9 +5,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 from openai import OpenAI
 
+from csv_utils import read_csv_rows
 from artifact_retrieval import DEFAULT_OUTPUT_ROOT, get_commit_output_dir, resolve_commit_coordinates
 from rationale_sentence_identifier import ensure_artifacts_file, identify_rationale_sentences
 
@@ -123,8 +123,7 @@ def generate_rationale_summary(
     prompt_strategy: str,
 ) -> Path:
     artifacts = read_json(artifacts_path)
-    identified_df = pd.read_csv(identified_path)
-    identified_rows = identified_df.to_dict(orient="records")
+    identified_rows = read_csv_rows(identified_path)
 
     prompt = build_generation_prompt(artifacts, identified_rows, prompt_strategy)
     (output_dir / "rationale_generation_prompt.txt").write_text(prompt, encoding="utf-8")
@@ -153,11 +152,13 @@ def build_generation_prompt(
     identified_rows: list[dict[str, Any]],
     prompt_strategy: str,
 ) -> str:
-    templates = pd.read_csv(CG_TEMPLATE_PATH)
-    template_row = templates[templates["prompt_strategy"] == prompt_strategy]
-    if template_row.empty:
+    template_row = next(
+        (row for row in read_csv_rows(CG_TEMPLATE_PATH) if row["prompt_strategy"] == prompt_strategy),
+        None,
+    )
+    if template_row is None:
         raise ValueError(f"Prompt strategy not found: {prompt_strategy}")
-    row = template_row.iloc[0]
+    row = template_row
 
     code_diff_information = "\n\n".join(
         row["code_diff_information"]

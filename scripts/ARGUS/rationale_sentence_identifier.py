@@ -7,10 +7,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import spacy
 from openai import OpenAI
 
+from csv_utils import read_csv_rows, write_csv_rows
 from artifact_retrieval import (
     DEFAULT_OUTPUT_ROOT,
     get_commit_output_dir,
@@ -118,7 +118,7 @@ def identify_rationale_sentences(
     payload = read_json(artifacts_path)
     sentences = build_sentence_rows(payload)
     sentences_csv_path = output_dir / "sentences.csv"
-    pd.DataFrame(sentences).to_csv(sentences_csv_path, index=False)
+    write_csv_rows(sentences_csv_path, sentences)
     write_json(output_dir / "sentences.json", sentences)
 
     prompt = build_identification_prompt(payload, sentences, prompt_strategy)
@@ -152,9 +152,9 @@ def identify_rationale_sentences(
     rationale_rows = [row for row in all_rows if row["final_labels"]]
 
     all_sentences_path = output_dir / "sentences_labeled.csv"
-    pd.DataFrame(all_rows).to_csv(all_sentences_path, index=False)
+    write_csv_rows(all_sentences_path, all_rows)
     identified_path = output_dir / "identified_rationale_sentences.csv"
-    pd.DataFrame(rationale_rows).to_csv(identified_path, index=False)
+    write_csv_rows(identified_path, rationale_rows)
 
     write_json(output_dir / "sentences_labeled.json", all_rows)
     write_json(output_dir / "identified_rationale_sentences.json", rationale_rows)
@@ -173,7 +173,7 @@ def write_json(path: Path, payload: Any) -> None:
 
 def get_nlp():
     if not hasattr(get_nlp, "_model"):
-        get_nlp._model = spacy.load("en_core_web_trf")
+        get_nlp._model = spacy.load(os.environ.get("ARGUS_SPACY_MODEL", "en_core_web_trf"))
     return get_nlp._model
 
 
@@ -343,15 +343,19 @@ def build_identification_prompt(
     sentences: list[dict[str, Any]],
     prompt_strategy: str,
 ) -> str:
-    templates = pd.read_csv(CI_TEMPLATE_PATH)
-    template_row = templates[templates["prompt_strategy"] == prompt_strategy]
-    if template_row.empty:
+    template_row = next(
+        (row for row in read_csv_rows(CI_TEMPLATE_PATH) if row["prompt_strategy"] == prompt_strategy),
+        None,
+    )
+    if template_row is None:
         raise ValueError(f"Prompt strategy not found: {prompt_strategy}")
-    row = template_row.iloc[0]
+    row = template_row
     template = row["template"]
 
-    codebook = pd.read_csv(CODEBOOK_PATH)
-    codebook = codebook[codebook["Annotation Labels"].isin(RATIONALE_CODES)].reset_index(drop=True)
+    codebook = [
+        row for row in read_csv_rows(CODEBOOK_PATH)
+        if row["Annotation Labels"] in RATIONALE_CODES
+    ]
 
     code_information = "\n\n".join(
         row["code_information"]
@@ -360,7 +364,7 @@ def build_identification_prompt(
         .replace("<definintion>", str(code_row["Description"]))
         .replace("<question>", str(code_row["Component Expressed as Question"]))
         .replace("<rule>", str(code_row.get("Rules", "")))
-        for index, code_row in codebook.iterrows()
+        for index, code_row in enumerate(codebook)
     )
 
     code_diff_information = "\n\n".join(

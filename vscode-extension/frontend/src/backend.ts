@@ -1,110 +1,109 @@
 import * as vscode from "vscode";
-import { ChildProcess, spawn } from "node:child_process";
-import { findFreePort } from "./port";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 
 export interface ExplainResult {
   markdown: string;
   artifacts?: unknown;
 }
 
-export interface SearchHit {
-  title: string;
-  path: string;
-  score: number;
-  snippet: string;
-}
-
-const READY_TIMEOUT_MS = 15_000;
-const READY_POLL_INTERVAL_MS = 200;
-
 export class BackendClient implements vscode.Disposable {
-  private process: ChildProcess | undefined;
-  private port: number | undefined;
-  private ready: Promise<void> | undefined;
+  private readonly runtimeDir: string;
+  private readonly python: string;
+  private readonly pythonRoot: string;
+  private setup: Promise<void> | undefined;
 
-  constructor(private readonly output: vscode.OutputChannel) {}
+  dispose(): void {}
 
-  async start(): Promise<void> {
+  constructor(
+    context: vscode.ExtensionContext,
+    private readonly output: vscode.OutputChannel,
+  ) {
+    this.runtimeDir = path.join(context.globalStorageUri.fsPath, "runtime");
+    this.pythonRoot = path.join(context.extensionPath, "python");
+    const venv = path.join(context.globalStorageUri.fsPath, "venv");
+    this.python = process.platform === "win32"
+      ? path.join(venv, "Scripts", "python.exe")
+      : path.join(venv, "bin", "python");
+  }
+
+  async install(): Promise<void> {
+    if (!this.setup) this.setup = this.installRuntime();
+    return this.setup;
+  }
+
+  private async installRuntime(): Promise<void> {
     const config = vscode.workspace.getConfiguration("rationale");
-    const command = config.get<string>("backend.command", "rationale-backend");
-    const configuredPort = config.get<number>("backend.port", 0);
+    const configuredPython = config.get<string>("pythonPath", "");
+    const bootstrapPython = configuredPython || (process.platform === "win32" ? "python" : "python3");
+    await fs.mkdir(this.runtimeDir, { recursive: true });
+    try {
+      await fs.access(this.python);
+    } catch {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Setting up Rationale backend…", cancellable: false },
+        async (progress) => {
+          progress.report({ message: "Creating Python environment" });
+          await this.run(bootstrapPython, ["-m", "venv", path.dirname(path.dirname(this.python))]);
+          await this.installDependencies(progress);
+        },
+      );
+      return;
+    }
+    await this.installDependencies();
+  }
 
-    this.port = configuredPort === 0 ? await findFreePort() : configuredPort;
+  private async installDependencies(progress?: vscode.Progress<{ message?: string }>): Promise<void> {
+    const requirementsPath = path.join(this.pythonRoot, "requirements.txt");
+    const requirements = await fs.readFile(requirementsPath);
+    const fingerprint = createHash("sha256").update(requirements).digest("hex");
+    const marker = path.join(path.dirname(path.dirname(this.python)), ".rationale-deps-installed");
+    try {
+      if ((await fs.readFile(marker, "utf8")) === fingerprint) return;
+    } catch {}
+    progress?.report({ message: "Installing backend dependencies" });
+    await this.run(this.python, ["-m", "pip", "install", "-r", requirementsPath]);
+    await fs.writeFile(marker, fingerprint);
+  }
 
-    const proc = spawn(command, ["--port", String(this.port)], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    this.process = proc;
-    proc.stdout?.on("data", (chunk) => this.output.append(chunk.toString()));
-    proc.stderr?.on("data", (chunk) => this.output.append(chunk.toString()));
-
-    this.ready = new Promise<void>((resolve, reject) => {
-      proc.on("error", (err) => {
-        reject(new Error(`Failed to start rationale backend (${command}): ${err.message}`));
-      });
-      proc.on("exit", (code) => {
-        if (this.process === proc) {
-          this.process = undefined;
+  async explainCommit(commitUrl: string, apiKey: string): Promise<ExplainResult> {
+    await this.install();
+    const outputRoot = path.join(this.runtimeDir, "results");
+    const baseArgs = ["--commit-url", commitUrl, "--output-root", outputRoot];
+    const model = vscode.workspace.getConfiguration("rationale").get("model", "o4-mini");
+    const runs = String(vscode.workspace.getConfiguration("rationale").get("runs", 3));
+    const env = { ...process.env, OPENAI_API_KEY: apiKey, OPENAI_TOKEN: apiKey, ARGUS_SPACY_MODEL: "en_core_web_sm" };
+    const scripts = ["artifact_retrieval.py", "rationale_sentence_identifier.py", "rationale_generation.py"];
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Generating rationale…", cancellable: false },
+      async (progress) => {
+        for (const [index, script] of scripts.entries()) {
+          progress.report({ message: ["Retrieving GitHub artifacts", "Identifying rationale sentences", "Generating rationale summary"][index] });
+          const stageArgs = script === "artifact_retrieval.py"
+            ? baseArgs
+            : [...baseArgs, "--model", model, ...(script === "rationale_sentence_identifier.py" ? ["--runs", runs] : [])];
+          await this.run(this.python, [path.join(this.pythonRoot, "scripts", "ARGUS", script), ...stageArgs], env, this.pythonRoot);
         }
-        reject(new Error(`Rationale backend exited early (code ${code}) before becoming ready.`));
-      });
-      this.pollUntilReady(this.port!).then(resolve, reject);
+      },
+    );
+    const url = new URL(commitUrl);
+    const [, owner, repo, , sha] = url.pathname.split("/");
+    const resultDir = path.join(outputRoot, `${owner}__${repo}__${sha.slice(0, 12)}`);
+    const summaryPath = path.join(resultDir, "rationale_summary.txt");
+    const markdown = await fs.readFile(summaryPath, "utf8");
+    return { markdown, artifacts: resultDir };
+  }
+
+  private run(command: string, args: string[], env = process.env, cwd?: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.output.appendLine(`$ ${command} ${args.join(" ")}`);
+      const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+      child.stdout?.on("data", (data) => this.output.append(data.toString()));
+      child.stderr?.on("data", (data) => this.output.append(data.toString()));
+      child.on("error", reject);
+      child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`Backend process exited with code ${code}. See the Rationale output channel.`)));
     });
-
-    this.ready.catch((err) => this.output.appendLine(String(err.message ?? err)));
-
-    return this.ready;
-  }
-
-  private async pollUntilReady(port: number): Promise<void> {
-    const deadline = Date.now() + READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/health`);
-        if (response.ok) {
-          return;
-        }
-      } catch {
-      }
-      await new Promise((resolve) => setTimeout(resolve, READY_POLL_INTERVAL_MS));
-    }
-    throw new Error("Timed out waiting for rationale backend to become ready.");
-  }
-
-  dispose(): void {
-    this.process?.kill();
-  }
-
-  private get baseUrl(): string {
-    return `http://127.0.0.1:${this.port}`;
-  }
-
-  async explainCommit(commitHash: string): Promise<ExplainResult> {
-    return this.postJson<ExplainResult>("/explain/commit", { commitHash });
-  }
-
-  async explainSpan(file: string, commitHashes: string[]): Promise<ExplainResult> {
-    return this.postJson<ExplainResult>("/explain/span", { file, commitHashes });
-  }
-
-  async search(query: string): Promise<SearchHit[]> {
-    return this.postJson<SearchHit[]>("/search", { query });
-  }
-
-  private async postJson<T>(pathname: string, body: unknown): Promise<T> {
-    if (!this.ready) {
-      throw new Error("Rationale backend has not been started.");
-    }
-    await this.ready;
-
-    const response = await fetch(`${this.baseUrl}${pathname}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      throw new Error(`Rationale backend request to ${pathname} failed: ${response.status} ${await response.text()}`);
-    }
-    return (await response.json()) as T;
   }
 }

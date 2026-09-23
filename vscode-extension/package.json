@@ -1,23 +1,23 @@
 {
   "name": "argus-rationale",
-  "displayName": "ARGUS Rationale",
-  "description": "Retrieve artifacts and generate rationale for a GitHub commit.",
+  "displayName": "Rationale",
+  "description": "Generate rationale for a GitHub commit.",
   "version": "0.1.0",
   "publisher": "argus-research",
   "repository": { "type": "git", "url": "https://github.com/sea-lab-wm/finegrained-rationale.git" },
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Other"],
-  "activationEvents": ["onCommand:argus.runCommit"],
-  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished", "onCommand:rationale.explainCommit"],
+  "main": "./frontend/dist/extension.js",
   "contributes": {
-    "commands": [{ "command": "argus.runCommit", "title": "ARGUS: Analyze GitHub Commit" }],
+    "commands": [{ "command": "rationale.explainCommit", "title": "Rationale: Analyze GitHub Commit..." }],
     "configuration": { "title": "ARGUS", "properties": {
-      "argus.pythonPath": { "type": "string", "default": "", "description": "Python 3.12 executable; empty uses python3/python from PATH." },
-      "argus.model": { "type": "string", "default": "o4-mini", "description": "OpenAI model used for rationale analysis." },
-      "argus.runs": { "type": "number", "default": 3, "minimum": 1, "description": "Identification runs used for majority voting." }
+      "rationale.pythonPath": { "type": "string", "default": "", "description": "Python executable used to create the private backend environment." },
+      "rationale.model": { "type": "string", "default": "o4-mini", "description": "OpenAI model used for rationale analysis." },
+      "rationale.runs": { "type": "number", "default": 3, "minimum": 1, "description": "Identification runs used for majority voting." }
     } }
   },
-  "scripts": { "build": "node build.js", "test": "npm run build && node --test test/*.test.js", "package": "npm run build && vsce package" },
+  "scripts": { "build": "node build.js && npm --prefix frontend ci && npm --prefix frontend run package", "test": "npm run build && node --test test/*.test.js", "package": "npm run build && vsce package" },
   "devDependencies": { "@vscode/vsce": "^3.2.2" },
-  "files": ["extension.js", "python/**", "README.md"]
+  "files": ["frontend/dist/**", "python/**", "README.md"]
 }

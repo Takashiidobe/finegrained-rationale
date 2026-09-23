@@ -1,81 +1,45 @@
 import * as vscode from "vscode";
-import { blameRange } from "./blame";
-import { enclosingSymbol } from "./symbols";
 import { BackendClient } from "./backend";
-import { showExplanation, showSearchResults } from "./panel";
+import { showExplanation } from "./panel";
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Rationale");
-  const backend = new BackendClient(output);
+  const backend = new BackendClient(context, output);
   context.subscriptions.push(backend, output);
-  void backend.start();
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("rationale.explainSelection", async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        vscode.window.showWarningMessage("Rationale: no active editor.");
-        return;
-      }
-
-      const selection = editor.selection;
-      const startLine = selection.start.line + 1;
-      const endLine = selection.end.line + 1;
-
-      try {
-        const symbol = await enclosingSymbol(editor.document, selection);
-        const hashes = await blameRange(editor.document.uri.fsPath, startLine, endLine);
-        if (hashes.length === 0) {
-          vscode.window.showInformationMessage("Rationale: no commits found for this range.");
-          return;
-        }
-
-        const label = symbol ? `${symbol.name} ` : "";
-        output.appendLine(`Explaining ${label}(${startLine}-${endLine}): ${hashes.join(", ")}`);
-
-        const result = await backend.explainSpan(editor.document.uri.fsPath, hashes);
-        showExplanation(result);
-      } catch (err) {
-        vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`);
-      }
-    }),
-  );
+  void backend.install().catch((err) => {
+    output.appendLine(String(err));
+    void vscode.window.showErrorMessage(`Rationale backend setup failed: ${(err as Error).message}`);
+  });
 
   context.subscriptions.push(
     vscode.commands.registerCommand("rationale.explainCommit", async () => {
-      const commitHash = await vscode.window.showInputBox({
-        prompt: "Commit hash to explain",
+      const commitUrl = await vscode.window.showInputBox({
+        prompt: "GitHub commit URL to analyze",
+        placeHolder: "https://github.com/owner/repository/commit/<sha>",
+        validateInput: (value) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/commit\/[a-fA-F0-9]+$/.test(value) ? undefined : "Enter a GitHub commit URL.",
       });
-      if (!commitHash) {
+      if (!commitUrl) {
         return;
       }
 
+      const apiKeyName = "openaiApiKey";
+      let apiKey = await context.secrets.get(apiKeyName);
+      if (!apiKey) {
+        apiKey = await vscode.window.showInputBox({ prompt: "OpenAI API key", password: true, ignoreFocusOut: true });
+        if (apiKey) await context.secrets.store(apiKeyName, apiKey);
+      }
+      if (!apiKey) return;
+
       try {
-        const result = await backend.explainCommit(commitHash);
+        const result = await backend.explainCommit(commitUrl, apiKey);
         showExplanation(result);
+        void vscode.window.showInformationMessage(`Rationale saved to ${String(result.artifacts)}.`);
       } catch (err) {
         vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`);
       }
     }),
   );
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand("rationale.search", async () => {
-      const query = await vscode.window.showInputBox({
-        prompt: "Search rationale notes",
-      });
-      if (!query) {
-        return;
-      }
-
-      try {
-        const hits = await backend.search(query);
-        showSearchResults(query, hits);
-      } catch (err) {
-        vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`);
-      }
-    }),
-  );
 }
 
 export function deactivate(): void {}

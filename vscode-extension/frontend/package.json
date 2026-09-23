@@ -1,7 +1,7 @@
 {
   "name": "rationale-ext",
   "displayName": "Rationale",
-  "description": "Look up the reconstructed justification for a commit or code span.",
+  "description": "Generate rationale for a GitHub commit.",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -9,34 +9,32 @@
   },
   "categories": ["Other"],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished", "onCommand:rationale.explainCommit"],
   "contributes": {
     "commands": [
       {
-        "command": "rationale.explainSelection",
-        "title": "Rationale: Explain Selection"
-      },
-      {
         "command": "rationale.explainCommit",
         "title": "Rationale: Explain Commit..."
-      },
-      {
-        "command": "rationale.search",
-        "title": "Rationale: Search Notes..."
       }
     ],
     "configuration": {
       "title": "Rationale",
       "properties": {
-        "rationale.backend.command": {
+        "rationale.pythonPath": {
           "type": "string",
-          "default": "rationale-backend",
-          "description": "Command used to launch the Python backend (must be on PATH, or an absolute path)."
+          "default": "",
+          "description": "Python executable used to create the private backend environment."
         },
-        "rationale.backend.port": {
+        "rationale.model": {
+          "type": "string",
+          "default": "o4-mini",
+          "description": "OpenAI model used for rationale analysis."
+        },
+        "rationale.runs": {
           "type": "number",
-          "default": 0,
-          "description": "Localhost port the backend listens on. 0 picks a free port automatically."
+          "default": 3,
+          "minimum": 1,
+          "description": "Identification runs used for majority voting."
         }
       }
     }

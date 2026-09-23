@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { ExplainResult, SearchHit } from "./backend";
+import type { ExplainResult } from "./backend";
 
 let panel: vscode.WebviewPanel | undefined;
 
@@ -32,23 +32,6 @@ export function showExplanation(result: ExplainResult): void {
 <html>
   <body>
     <pre>${escapeHtml(result.markdown)}</pre>
-  </body>
-</html>`;
-  p.reveal(vscode.ViewColumn.Beside);
-}
-
-export function showSearchResults(query: string, hits: SearchHit[]): void {
-  const p = getPanel();
-  const items = hits
-    .map(
-      (hit) => `<li><strong>${escapeHtml(hit.title)}</strong> (${hit.score.toFixed(2)})<br>${escapeHtml(hit.snippet)}</li>`,
-    )
-    .join("\n");
-  p.webview.html = `<!DOCTYPE html>
-<html>
-  <body>
-    <h2>Results for "${escapeHtml(query)}"</h2>
-    <ul>${items}</ul>
   </body>
 </html>`;
   p.reveal(vscode.ViewColumn.Beside);

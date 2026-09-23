@@ -1,3 +1,6 @@
 venv/*
 *.pyc
 .vscode
+!/vscode-extension/.vscode/
+!/vscode-extension/.vscode/launch.json
+!/vscode-extension/.vscode/tasks.json

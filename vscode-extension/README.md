@@ -1,18 +1,24 @@
-# ARGUS Rationale for VS Code
+# Rationale for VS Code
 
-Run **ARGUS: Analyze GitHub Commit** from the Command Palette, enter a GitHub commit URL, and provide an OpenAI API key. The extension retrieves GitHub artifacts, identifies rationale sentences, and generates a summary. Results are saved under VS Code's global storage directory in `results/<owner>__<repo>__<sha-prefix>/`.
+Run **Rationale: Analyze GitHub Commit...** from the Command Palette and enter a GitHub commit URL. On first VS Code startup, the extension creates a private Python environment in global storage and installs the dependencies used by the bundled ARGUS pipeline. Setup errors appear in a notification and in the **Rationale** output channel. Analysis runs the bundled artifact retrieval, rationale identification, and summary generation scripts as one-shot Python processes; no backend web server or port is needed.
 
-On first command use, ARGUS creates a private Python virtual environment in VS Code global storage and installs compatible dependencies. Python 3.10 through 3.13 are supported. Later runs reuse the environment and reinstall dependencies if the extension's dependency spec changes. Setup and analysis run with progress and can be cancelled. Python can be selected with `argus.pythonPath`; `python3` (or `python` on Windows) is used by default. GitHub token is optional but recommended to avoid low unauthenticated API limits. API keys are kept in VS Code SecretStorage.
+The extension asks for an OpenAI API key when needed and stores it in VS Code SecretStorage. GitHub token is optional; set `GITHUB_TOKEN` in the VS Code process environment to raise GitHub API limits. Python 3.10 through 3.14 are supported. Set `rationale.pythonPath` if `python3` (or `python` on Windows) is not the Python executable you want to use. Results are stored under the extension's global storage directory in `runtime/results/`.
 
-The extension package contains the pipeline source and required prompt/data files. Python wheels and spaCy's small English model (about 13 MB) are installed on first use. The extension uses this CPU-only model for sentence splitting; the command-line replication pipeline continues to use the transformer model by default. This can change sentence boundaries slightly. `GITHUB_TOKEN` and `OPENAI_API_KEY` are not required in CI packaging jobs. The original pinned replication environment remains in the root `requirements.txt`; the extension uses compatible version ranges from `requirements-extension.txt`.
+## Run from source
+
+```sh
+cd vscode-extension
+npm ci
+npm run build
+```
+
+Open this folder in VS Code and press **F5** to start an Extension Development Host. Use the Rationale command from its Command Palette. The first activation installs Python dependencies; running analysis requires an OpenAI API key.
 
 ## Build a VSIX
-
-From this directory:
 
 ```sh
 npm ci
 npm run package -- --target linux-x64
 ```
 
-Change the target to `darwin-arm64`, `darwin-x64`, `win32-x64`, or another target supported by `@vscode/vsce` to produce a platform-targeted VSIX.
+Choose a target supported by `@vscode/vsce`, such as `darwin-arm64`, `darwin-x64`, or `win32-x64`.

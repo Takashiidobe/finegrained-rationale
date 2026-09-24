@@ -6,14 +6,24 @@ import * as path from "node:path";
 import type { LlmConfiguration } from "./configuration";
 
 export interface ExplainResult {
-  markdown: string;
-  artifacts?: unknown;
+  commitUrl: string;
+  commitSha: string;
+  repository: string;
+  components: {
+    GOAL: string;
+    NEED: string;
+    ALTERNATIVES: string;
+  };
+  rationaleFile: string;
+  artifacts: string;
 }
 
 export class BackendClient implements vscode.Disposable {
   private readonly runtimeDir: string;
   private readonly python: string;
   private readonly pythonRoot: string;
+  private readonly extensionPath: string;
+  private readonly extensionMode: vscode.ExtensionMode;
   private setup: Promise<void> | undefined;
 
   dispose(): void {}
@@ -23,6 +33,8 @@ export class BackendClient implements vscode.Disposable {
     private readonly output: vscode.OutputChannel,
   ) {
     this.runtimeDir = path.join(context.globalStorageUri.fsPath, "runtime");
+    this.extensionPath = context.extensionPath;
+    this.extensionMode = context.extensionMode;
     this.pythonRoot = path.join(context.extensionPath, "python");
     const venv = path.join(context.globalStorageUri.fsPath, "venv");
     this.python = process.platform === "win32"
@@ -33,6 +45,19 @@ export class BackendClient implements vscode.Disposable {
   async install(): Promise<void> {
     if (!this.setup) this.setup = this.installRuntime();
     return this.setup;
+  }
+
+  async findExistingRationale(commitUrl: string): Promise<string | undefined> {
+    const url = new URL(commitUrl);
+    const [, owner, repo, , sha] = url.pathname.split("/");
+    const repoRoot = await this.getWorkspaceRepoRoot(this.extensionPath, this.extensionMode);
+    const file = path.join(repoRoot, ".rationale", owner, repo, `commit-${sha.slice(0, 12)}.md`);
+    try {
+      await fs.access(file);
+      return file;
+    } catch {
+      return undefined;
+    }
   }
 
   private async installRuntime(): Promise<void> {
@@ -70,11 +95,12 @@ export class BackendClient implements vscode.Disposable {
   }
 
   async explainCommit(commitUrl: string, llm: LlmConfiguration, githubToken?: string): Promise<ExplainResult> {
+    const repoRoot = await this.getWorkspaceRepoRoot(this.extensionPath, this.extensionMode);
     await this.install();
     const outputRoot = path.join(this.runtimeDir, "results");
     const baseArgs = ["--commit-url", commitUrl, "--output-root", outputRoot];
     const model = llm.model;
-    const runs = String(vscode.workspace.getConfiguration("rationale").get("runs", 3));
+    const runs = String(Math.max(1, Math.floor(vscode.workspace.getConfiguration("rationale").get<number>("runs", 1))));
     const env: NodeJS.ProcessEnv = { ...process.env, ARGUS_LLM_MODE: llm.mode, ARGUS_LLM_PROVIDER: llm.provider, ARGUS_SPACY_MODEL: "en_core_web_sm" };
     if (llm.apiKey) env.ARGUS_LLM_API_KEY = llm.apiKey;
     if (llm.mode === "api" && llm.provider === "openai" && llm.apiKey) {
@@ -107,9 +133,77 @@ export class BackendClient implements vscode.Disposable {
     const url = new URL(commitUrl);
     const [, owner, repo, , sha] = url.pathname.split("/");
     const resultDir = path.join(outputRoot, `${owner}__${repo}__${sha.slice(0, 12)}`);
-    const summaryPath = path.join(resultDir, "rationale_summary.txt");
-    const markdown = await fs.readFile(summaryPath, "utf8");
-    return { markdown, artifacts: resultDir };
+    const summaryPath = path.join(resultDir, "rationale_summary.json");
+    const summary = JSON.parse(await fs.readFile(summaryPath, "utf8")) as {
+      components?: Record<string, string>;
+    };
+    const components = {
+      GOAL: summary.components?.GOAL || "",
+      NEED: summary.components?.NEED || "",
+      ALTERNATIVES: summary.components?.ALTERNATIVES || "",
+    };
+    const repository = `${owner}/${repo}`;
+    const rationaleDir = path.join(repoRoot, ".rationale");
+    const rationaleFile = path.join(rationaleDir, owner, repo, `commit-${sha.slice(0, 12)}.md`);
+    await fs.mkdir(path.dirname(rationaleFile), { recursive: true });
+    const quote = (value: string): string => JSON.stringify(value);
+    const markdown = [
+      "---",
+      `commit: ${quote(commitUrl)}`,
+      `commit_sha: ${quote(sha)}`,
+      `repository: ${quote(repository)}`,
+      `provider: ${quote(llm.provider)}`,
+      `model: ${quote(model)}`,
+      `runs: ${runs}`,
+      `generated_at: ${quote(new Date().toISOString())}`,
+      "---",
+      "",
+      `# Rationale for ${repository}@${sha.slice(0, 12)}`,
+      "",
+      "## GOAL",
+      "",
+      components.GOAL || "Not identified.",
+      "",
+      "## NEED",
+      "",
+      components.NEED || "Not identified.",
+      "",
+      "## ALTERNATIVE",
+      "",
+      components.ALTERNATIVES || "Not identified.",
+      "",
+    ].join("\n");
+    await fs.writeFile(rationaleFile, markdown, "utf8");
+    this.output.appendLine(`Saved rationale to ${rationaleFile}`);
+    return { commitUrl, commitSha: sha, repository, components, rationaleFile, artifacts: resultDir };
+  }
+
+  private async getWorkspaceRepoRoot(extensionPath: string, extensionMode: vscode.ExtensionMode): Promise<string> {
+    const workspaces = vscode.workspace.workspaceFolders || [];
+    const candidates = workspaces.map((workspace) => workspace.uri.fsPath);
+    if (extensionMode === vscode.ExtensionMode.Development) candidates.push(extensionPath);
+    for (const candidate of candidates) {
+      try {
+        const root = (await this.capture("git", ["-C", candidate, "rev-parse", "--show-toplevel"])).trim();
+        if (root) return root;
+      } catch {}
+    }
+    if (!workspaces.length && extensionMode !== vscode.ExtensionMode.Development) {
+      throw new Error("Open a Git repository folder in VS Code before generating rationale.");
+    }
+    throw new Error("Could not find the root of the open Git repository.");
+  }
+
+  private capture(command: string, args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (data) => { stdout += data.toString(); });
+      child.stderr?.on("data", (data) => { stderr += data.toString(); });
+      child.on("error", reject);
+      child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${command} exited with code ${code}`)));
+    });
   }
 
   private run(command: string, args: string[], env = process.env, cwd?: string): Promise<void> {

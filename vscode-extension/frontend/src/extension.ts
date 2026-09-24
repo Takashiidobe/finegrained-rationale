@@ -44,22 +44,37 @@ async function explainCommit(context: vscode.ExtensionContext, backend: BackendC
   });
   if (!commitUrl) return;
 
-  let llm = await getLlmConfiguration(context);
-  if (llm.mode === "api" && !llm.apiKey) {
-    const choice = await vscode.window.showWarningMessage(
-      "Configure a provider API key before generating rationale.",
-      "Configure",
-    );
-    if (choice !== "Configure") return;
-    openConfigurationPage(context);
-    return;
-  }
-
   try {
+    const existingRationale = await backend.findExistingRationale(commitUrl);
+    if (existingRationale) {
+      const choice = await vscode.window.showInformationMessage(
+        "A rationale already exists for this commit.",
+        "Open and edit",
+        "Regenerate",
+      );
+      if (choice === "Open and edit") {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.file(existingRationale));
+        await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Active, preview: false });
+        return;
+      }
+      if (choice !== "Regenerate") return;
+    }
+
+    const llm = await getLlmConfiguration(context);
+    if (llm.mode === "api" && !llm.apiKey) {
+      const choice = await vscode.window.showWarningMessage(
+        "Configure a provider API key before generating rationale.",
+        "Configure",
+      );
+      if (choice !== "Configure") return;
+      openConfigurationPage(context);
+      return;
+    }
+
     const githubToken = await context.secrets.get(GITHUB_SECRET);
     const result = await backend.explainCommit(commitUrl, llm, githubToken);
     showExplanation(result);
-    void vscode.window.showInformationMessage(`Rationale saved to ${String(result.artifacts)}.`);
+    void vscode.window.showInformationMessage(`Rationale saved to ${result.rationaleFile}.`);
   } catch (err) {
     void vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`);
   }

@@ -76,7 +76,7 @@ def _run_claude_cli(prompt: str, model_name: str, workdir: Path) -> str:
 
 def _run_codex_cli(prompt: str, model_name: str, workdir: Path) -> str:
     command = [
-        "codex", "exec", "--json", "--sandbox", "read-only", "--ask-for-approval", "never",
+        "codex", "exec", "--json", "--sandbox", "read-only", "--config", 'approval_policy="never"',
         "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--model", model_name, "-",
     ]
     try:

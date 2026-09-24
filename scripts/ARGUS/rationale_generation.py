@@ -108,7 +108,7 @@ def ensure_pipeline_inputs(
         artifacts_path=Path(artifacts_path),
         output_dir=output_dir,
         model_name="o4-mini",
-        runs=3,
+        runs=1,
         prompt_strategy="CI-FS",
     )
     return Path(artifacts_path), identified_path

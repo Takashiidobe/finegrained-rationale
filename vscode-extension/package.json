@@ -41,9 +41,9 @@
         },
         "rationale.runs": {
           "type": "number",
-          "default": 3,
+          "default": 1,
           "minimum": 1,
-          "description": "Identification runs used for majority voting."
+          "description": "Identification runs used for majority voting. Defaults to one run."
         }
       }
     }

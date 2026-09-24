@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runs",
         type=int,
-        default=3,
+        default=1,
         help="Number of LLM runs used for majority voting.",
     )
     parser.add_argument(

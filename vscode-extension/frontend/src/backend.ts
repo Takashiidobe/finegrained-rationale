@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import type { LlmConfiguration } from "./configuration";
 
 export interface ExplainResult {
   markdown: string;
@@ -68,13 +69,28 @@ export class BackendClient implements vscode.Disposable {
     await fs.writeFile(marker, fingerprint);
   }
 
-  async explainCommit(commitUrl: string, apiKey: string): Promise<ExplainResult> {
+  async explainCommit(commitUrl: string, llm: LlmConfiguration, githubToken?: string): Promise<ExplainResult> {
     await this.install();
     const outputRoot = path.join(this.runtimeDir, "results");
     const baseArgs = ["--commit-url", commitUrl, "--output-root", outputRoot];
-    const model = vscode.workspace.getConfiguration("rationale").get("model", "o4-mini");
+    const model = llm.model;
     const runs = String(vscode.workspace.getConfiguration("rationale").get("runs", 3));
-    const env = { ...process.env, OPENAI_API_KEY: apiKey, OPENAI_TOKEN: apiKey, ARGUS_SPACY_MODEL: "en_core_web_sm" };
+    const env: NodeJS.ProcessEnv = { ...process.env, ARGUS_LLM_MODE: llm.mode, ARGUS_LLM_PROVIDER: llm.provider, ARGUS_SPACY_MODEL: "en_core_web_sm" };
+    if (llm.apiKey) env.ARGUS_LLM_API_KEY = llm.apiKey;
+    if (llm.mode === "api" && llm.provider === "openai" && llm.apiKey) {
+      env.OPENAI_API_KEY = llm.apiKey;
+      env.OPENAI_TOKEN = llm.apiKey;
+    }
+    if (llm.mode === "cli") {
+      delete env.OPENAI_API_KEY;
+      delete env.OPENAI_TOKEN;
+      delete env.CODEX_API_KEY;
+      delete env.ANTHROPIC_API_KEY;
+      delete env.ANTHROPIC_AUTH_TOKEN;
+      delete env.ANTHROPIC_BASE_URL;
+      delete env.OPENAI_BASE_URL;
+    }
+    if (githubToken) env.GITHUB_TOKEN = githubToken;
     const scripts = ["artifact_retrieval.py", "rationale_sentence_identifier.py", "rationale_generation.py"];
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Generating rationale…", cancellable: false },

@@ -1,13 +1,12 @@
 import argparse
 import json
-import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
 
 from csv_utils import read_csv_rows
+from llm_provider import generate_text
 from artifact_retrieval import DEFAULT_OUTPUT_ROOT, get_commit_output_dir, resolve_commit_coordinates
 from rationale_sentence_identifier import ensure_artifacts_file, identify_rationale_sentences
 
@@ -245,17 +244,7 @@ def format_identified_sentences_for_prompt(template: str, rows: list[dict[str, A
 
 
 def request_openai_response(prompt: str, model_name: str) -> str:
-    api_key = os.environ.get("OPENAI_TOKEN") or os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_TOKEN or OPENAI_API_KEY must be set.")
-
-    client = OpenAI(api_key=api_key)
-    response = client.responses.create(
-        model=model_name,
-        input=[{"role": "user", "content": prompt}],
-        reasoning={"effort": "high"},
-    )
-    return (response.output_text or "").strip()
+    return generate_text(prompt, model_name)
 
 
 def parse_rationale_response(text: str) -> dict[str, str]:

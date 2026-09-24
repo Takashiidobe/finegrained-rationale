@@ -9,9 +9,13 @@
   },
   "categories": ["Other"],
   "main": "./dist/extension.js",
-  "activationEvents": ["onStartupFinished", "onCommand:rationale.explainCommit"],
+  "activationEvents": ["onStartupFinished", "onCommand:rationale.explainCommit", "onCommand:rationale.configure"],
   "contributes": {
     "commands": [
+      {
+        "command": "rationale.configure",
+        "title": "Rationale: Configure"
+      },
       {
         "command": "rationale.explainCommit",
         "title": "Rationale: Search via Commit..."
@@ -24,11 +28,6 @@
           "type": "string",
           "default": "",
           "description": "Python executable used to create the private backend environment."
-        },
-        "rationale.model": {
-          "type": "string",
-          "default": "o4-mini",
-          "description": "OpenAI model used for rationale analysis."
         },
         "rationale.runs": {
           "type": "number",

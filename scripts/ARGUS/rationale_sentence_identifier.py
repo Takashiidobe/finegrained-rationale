@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import spacy
-from openai import OpenAI
 
 from csv_utils import read_csv_rows, write_csv_rows
+from llm_provider import generate_text
 from artifact_retrieval import (
     DEFAULT_OUTPUT_ROOT,
     get_commit_output_dir,
@@ -450,17 +450,7 @@ def format_sentences_for_prompt(template: str, sentences: list[dict[str, Any]]) 
 
 
 def request_openai_response(prompt: str, model_name: str) -> str:
-    api_key = os.environ.get("OPENAI_TOKEN") or os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_TOKEN or OPENAI_API_KEY must be set.")
-
-    client = OpenAI(api_key=api_key)
-    response = client.responses.create(
-        model=model_name,
-        input=[{"role": "user", "content": prompt}],
-        reasoning={"effort": "high"},
-    )
-    return (response.output_text or "").strip()
+    return generate_text(prompt, model_name)
 
 
 def parse_identification_response(response_text: str) -> dict[str, list[str]]:

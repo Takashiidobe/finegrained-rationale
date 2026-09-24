@@ -9,7 +9,7 @@ test('packaged extension points to the frontend and bundles its one-shot Python 
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(manifest.main, './frontend/dist/extension.js');
   assert.ok(fs.existsSync(path.join(root, manifest.main)));
-  for (const script of ['artifact_retrieval.py', 'rationale_sentence_identifier.py', 'rationale_generation.py']) {
+  for (const script of ['artifact_retrieval.py', 'rationale_sentence_identifier.py', 'rationale_generation.py', 'llm_provider.py']) {
     assert.ok(fs.existsSync(path.join(root, 'python', 'scripts', 'ARGUS', script)));
   }
   assert.ok(fs.existsSync(path.join(root, 'python', 'requirements.txt')));

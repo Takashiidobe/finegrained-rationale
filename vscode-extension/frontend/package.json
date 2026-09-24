@@ -14,7 +14,7 @@
     "commands": [
       {
         "command": "rationale.explainCommit",
-        "title": "Rationale: Explain Commit..."
+        "title": "Rationale: Search via Commit..."
       }
     ],
     "configuration": {

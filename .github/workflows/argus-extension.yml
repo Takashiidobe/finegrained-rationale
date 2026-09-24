@@ -25,7 +25,7 @@ on:
 
 jobs:
   dependencies:
-    name: Install Python dependencies (${{ matrix.os }})
+    name: Install Python dependencies (Python ${{ matrix.python }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -34,9 +34,13 @@ jobs:
           - os: ubuntu-latest
             python: '3.10'
           - os: ubuntu-latest
+            python: '3.11'
+          - os: ubuntu-latest
             python: '3.12'
           - os: ubuntu-latest
             python: '3.13'
+          - os: ubuntu-latest
+            python: '3.14'
           - os: macos-latest
             python: '3.12'
           - os: windows-latest
@@ -51,12 +55,8 @@ jobs:
       - run: python -m compileall -q scripts/ARGUS
 
   package:
-    name: Package (${{ matrix.target }})
+    name: Package universal VSIX
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [linux-x64, darwin-x64, darwin-arm64, win32-x64, win32-arm64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -68,9 +68,9 @@ jobs:
         working-directory: vscode-extension
       - run: npm test
         working-directory: vscode-extension
-      - run: npx vsce package --target ${{ matrix.target }}
+      - run: npm run package
         working-directory: vscode-extension
       - uses: actions/upload-artifact@v4
         with:
-          name: argus-${{ matrix.target }}
-          path: vscode-extension/*.vsix
+          name: argus-rationale-universal
+          path: vscode-extension/argus-rationale-*.vsix

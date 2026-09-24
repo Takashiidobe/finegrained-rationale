@@ -3,21 +3,63 @@
   "displayName": "Rationale",
   "description": "Generate rationale for a GitHub commit.",
   "version": "0.1.0",
-  "publisher": "argus-research",
-  "repository": { "type": "git", "url": "https://github.com/sea-lab-wm/finegrained-rationale.git" },
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished", "onCommand:rationale.explainCommit"],
+  "publisher": "SEALab",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sea-lab-wm/finegrained-rationale.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:rationale.explainCommit"
+  ],
   "main": "./frontend/dist/extension.js",
   "contributes": {
-    "commands": [{ "command": "rationale.explainCommit", "title": "Rationale: Analyze GitHub Commit..." }],
-    "configuration": { "title": "ARGUS", "properties": {
-      "rationale.pythonPath": { "type": "string", "default": "", "description": "Python executable used to create the private backend environment." },
-      "rationale.model": { "type": "string", "default": "o4-mini", "description": "OpenAI model used for rationale analysis." },
-      "rationale.runs": { "type": "number", "default": 3, "minimum": 1, "description": "Identification runs used for majority voting." }
-    } }
+    "commands": [
+      {
+        "command": "rationale.explainCommit",
+        "title": "Rationale: Search via Commit..."
+      }
+    ],
+    "configuration": {
+      "title": "ARGUS",
+      "properties": {
+        "rationale.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable used to create the private backend environment."
+        },
+        "rationale.model": {
+          "type": "string",
+          "default": "o4-mini",
+          "description": "OpenAI model used for rationale analysis."
+        },
+        "rationale.runs": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "Identification runs used for majority voting."
+        }
+      }
+    }
   },
-  "scripts": { "build": "node build.js && npm --prefix frontend ci && npm --prefix frontend run package", "test": "npm run build && node --test test/*.test.js", "package": "npm run build && vsce package" },
-  "devDependencies": { "@vscode/vsce": "^3.2.2" },
-  "files": ["frontend/dist/**", "python/**", "README.md"]
+  "scripts": {
+    "build": "node build.js && npm --prefix frontend ci && npm --prefix frontend run package",
+    "debug": "npm run build && node debug.js",
+    "test": "npm run build && node --test test/*.test.js",
+    "package": "npm run build && vsce package"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.2"
+  },
+  "files": [
+    "frontend/dist/**",
+    "python/**",
+    "README.md"
+  ]
 }

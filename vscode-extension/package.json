@@ -2,7 +2,7 @@
   "name": "argus-rationale",
   "displayName": "Rationale Generator",
   "description": "Generate rationale for a GitHub commit.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "SEALab",
   "repository": {
     "type": "git",
@@ -17,6 +17,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:rationale.explainCommit",
+    "onCommand:rationale.explainSelection",
     "onCommand:rationale.configure"
   ],
   "main": "./frontend/dist/extension.js",
@@ -29,8 +30,21 @@
       {
         "command": "rationale.explainCommit",
         "title": "Rationale: Search via Commit..."
+      },
+      {
+        "command": "rationale.explainSelection",
+        "title": "Rationale: Explain Selected Code"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "rationale.explainSelection",
+          "when": "editorHasSelection && !editorReadonly",
+          "group": "navigation@10"
+        }
+      ]
+    },
     "configuration": {
       "title": "ARGUS",
       "properties": {

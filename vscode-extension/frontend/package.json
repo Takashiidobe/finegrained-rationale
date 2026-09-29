@@ -9,7 +9,7 @@
   },
   "categories": ["Other"],
   "main": "./dist/extension.js",
-  "activationEvents": ["onStartupFinished", "onCommand:rationale.explainCommit", "onCommand:rationale.configure"],
+  "activationEvents": ["onStartupFinished", "onCommand:rationale.explainCommit", "onCommand:rationale.explainSelection", "onCommand:rationale.configure"],
   "contributes": {
     "commands": [
       {
@@ -19,8 +19,21 @@
       {
         "command": "rationale.explainCommit",
         "title": "Rationale: Search via Commit..."
+      },
+      {
+        "command": "rationale.explainSelection",
+        "title": "Rationale: Explain Selected Code"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "rationale.explainSelection",
+          "when": "editorHasSelection && !editorReadonly",
+          "group": "navigation@10"
+        }
+      ]
+    },
     "configuration": {
       "title": "Rationale",
       "properties": {

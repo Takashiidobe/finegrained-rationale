@@ -41,9 +41,11 @@ function getCommitUrl(value: string): string | undefined {
 export function showExplanation(result: ExplainResult): void {
   const p = getPanel();
   const commitUrl = getCommitUrl(result.commitUrl);
-  const commit = commitUrl
-    ? `<a href="${escapeHtml(commitUrl)}"><code>${escapeHtml(result.commitSha.slice(0, 12))}</code></a>`
-    : `<code>${escapeHtml(result.commitSha.slice(0, 12))}</code>`;
+  const commit = result.sourceCommits
+    ? result.sourceCommits.map((source) => `<a href="${escapeHtml(source.url)}"><code>${escapeHtml(source.sha.slice(0, 12))}</code></a> (${source.lines} lines)`).join(" · ")
+    : commitUrl
+      ? `<a href="${escapeHtml(commitUrl)}"><code>${escapeHtml(result.commitSha.slice(0, 12))}</code></a>`
+      : `<code>${escapeHtml(result.commitSha.slice(0, 12))}</code>`;
   const component = (label: string, value: string): string => `
     <section>
       <h2>${label}</h2>
@@ -65,7 +67,7 @@ export function showExplanation(result: ExplainResult): void {
     </style>
   </head>
   <body>
-    <h1>Commit rationale</h1>
+    <h1>${escapeHtml(result.title || "Commit rationale")}</h1>
     <p class="muted">${escapeHtml(result.repository)} · ${commit}</p>
     ${component("GOAL", result.components.GOAL)}
     ${component("NEED", result.components.NEED)}

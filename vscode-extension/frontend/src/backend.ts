@@ -16,6 +16,36 @@ export interface ExplainResult {
   };
   rationaleFile: string;
   artifacts: string;
+  title?: string;
+  sourceCommits?: Array<{ sha: string; url: string; lines: number }>;
+  selection?: { file: string; startLine: number; endLine: number };
+}
+
+interface SelectionInput { filePath: string; startLine: number; endLine: number; code: string }
+
+function parseGitHubRemote(remote: string): { owner: string; repo: string } | undefined {
+  const match = remote.match(/(?:github\.com[:/])([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  return match ? { owner: match[1], repo: match[2] } : undefined;
+}
+
+function buildLlmEnvironment(llm: LlmConfiguration, githubToken?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ARGUS_LLM_MODE: llm.mode, ARGUS_LLM_PROVIDER: llm.provider, ARGUS_SPACY_MODEL: "en_core_web_sm" };
+  if (llm.apiKey) env.ARGUS_LLM_API_KEY = llm.apiKey;
+  if (llm.mode === "api" && llm.provider === "openai" && llm.apiKey) {
+    env.OPENAI_API_KEY = llm.apiKey;
+    env.OPENAI_TOKEN = llm.apiKey;
+  }
+  if (llm.mode === "cli") {
+    delete env.OPENAI_API_KEY;
+    delete env.OPENAI_TOKEN;
+    delete env.CODEX_API_KEY;
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.ANTHROPIC_BASE_URL;
+    delete env.OPENAI_BASE_URL;
+  }
+  if (githubToken) env.GITHUB_TOKEN = githubToken;
+  return env;
 }
 
 export class BackendClient implements vscode.Disposable {
@@ -176,6 +206,72 @@ export class BackendClient implements vscode.Disposable {
     await fs.writeFile(rationaleFile, markdown, "utf8");
     this.output.appendLine(`Saved rationale to ${rationaleFile}`);
     return { commitUrl, commitSha: sha, repository, components, rationaleFile, artifacts: resultDir };
+  }
+
+  async explainSelection(selection: SelectionInput, llm: LlmConfiguration, githubToken?: string): Promise<ExplainResult> {
+    const filePath = path.resolve(selection.filePath);
+    const repoRoot = (await this.capture("git", ["-C", path.dirname(filePath), "rev-parse", "--show-toplevel"])).trim();
+    const relativeFile = path.relative(repoRoot, filePath);
+    if (relativeFile.startsWith("..") || path.isAbsolute(relativeFile)) throw new Error("The selected file is outside its Git repository.");
+    const blame = await this.capture("git", ["-C", repoRoot, "blame", "--line-porcelain", "-L", `${selection.startLine},${selection.endLine}`, "--", relativeFile]);
+    const counts = new Map<string, number>();
+    const order = new Map<string, number>();
+    for (const line of blame.split(/\r?\n/)) {
+      const match = line.match(/^([a-f0-9]{40}) \d+ \d+(?: \d+)?$/i);
+      if (!match) continue;
+      const sha = match[1];
+      counts.set(sha, (counts.get(sha) || 0) + 1);
+      if (!order.has(sha)) order.set(sha, order.size);
+    }
+    const commits = [...counts.entries()].sort((a, b) => b[1] - a[1] || (order.get(a[0])! - order.get(b[0])!)).slice(0, 3);
+    if (!commits.length) throw new Error("Git did not find commit history for the selected lines.");
+    const remote = (await this.capture("git", ["-C", repoRoot, "config", "--get", "remote.origin.url"])).trim();
+    const github = parseGitHubRemote(remote);
+    if (!github) throw new Error("The repository origin must be a GitHub URL to retrieve commit rationale.");
+    await this.install();
+    const outputRoot = path.join(this.runtimeDir, "results");
+    const sourceCommits = commits.map(([sha, lines]) => ({ sha, lines, url: `https://github.com/${github.owner}/${github.repo}/commit/${sha}` }));
+    const model = llm.model;
+    const runs = String(Math.max(1, Math.floor(vscode.workspace.getConfiguration("rationale").get<number>("runs", 1))));
+    const env = buildLlmEnvironment(llm, githubToken);
+    const scripts = ["artifact_retrieval.py", "rationale_sentence_identifier.py", "rationale_generation.py"];
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Analyzing selected code…", cancellable: false },
+      async (progress) => {
+        for (const [commitIndex, commit] of sourceCommits.entries()) {
+          for (const [index, script] of scripts.entries()) {
+            progress.report({ message: `Commit ${commitIndex + 1}/${sourceCommits.length}: ${["Retrieving GitHub artifacts", "Identifying rationale sentences", "Generating commit summary"][index]}` });
+            const base = ["--commit-url", commit.url, "--output-root", outputRoot];
+            const args = script === "artifact_retrieval.py" ? base : [...base, "--model", model, ...(script === "rationale_sentence_identifier.py" ? ["--runs", runs] : [])];
+            await this.run(this.python, [path.join(this.pythonRoot, "scripts", "ARGUS", script), ...args], env, this.pythonRoot);
+          }
+        }
+      },
+    );
+    const inputPath = path.join(this.runtimeDir, `selection-${createHash("sha256").update(`${filePath}:${selection.startLine}:${selection.endLine}:${Date.now()}`).digest("hex").slice(0, 16)}.json`);
+    const resultPath = `${inputPath}.summary.json`;
+    await fs.writeFile(inputPath, JSON.stringify({
+      repository: `${github.owner}/${github.repo}`, file: relativeFile,
+      start_line: selection.startLine, end_line: selection.endLine, code: selection.code,
+      commits: sourceCommits.map((commit) => ({ ...commit, summary_path: path.join(outputRoot, `${github.owner}__${github.repo}__${commit.sha.slice(0, 12)}`, "rationale_summary.json") })),
+    }), "utf8");
+    await this.run(this.python, [path.join(this.pythonRoot, "scripts", "ARGUS", "selection_synthesis.py"), "--input", inputPath, "--output", resultPath, "--model", model], env, this.pythonRoot);
+    const summary = JSON.parse(await fs.readFile(resultPath, "utf8")) as { components?: Record<string, string> };
+    const components = { GOAL: summary.components?.GOAL || "", NEED: summary.components?.NEED || "", ALTERNATIVES: summary.components?.ALTERNATIVES || "" };
+    const rationaleFile = path.join(repoRoot, ".rationale", github.owner, github.repo, `selection-${createHash("sha256").update(`${relativeFile}:${selection.startLine}:${selection.endLine}`).digest("hex").slice(0, 12)}.md`);
+    await fs.mkdir(path.dirname(rationaleFile), { recursive: true });
+    await fs.writeFile(rationaleFile, [
+      "---", `repository: ${JSON.stringify(`${github.owner}/${github.repo}`)}`, `file: ${JSON.stringify(relativeFile)}`,
+      `start_line: ${selection.startLine}`, `end_line: ${selection.endLine}`, `generated_at: ${JSON.stringify(new Date().toISOString())}`, "---", "",
+      `# Rationale for ${relativeFile}:${selection.startLine}-${selection.endLine}`, "",
+      ...sourceCommits.map((commit) => `- [${commit.sha.slice(0, 12)}](${commit.url}) — ${commit.lines} selected lines`), "",
+      "## GOAL", "", components.GOAL || "Not identified.", "", "## NEED", "", components.NEED || "Not identified.", "",
+      "## ALTERNATIVES", "", components.ALTERNATIVES || "Not identified.", "",
+    ].join("\n"), "utf8");
+    this.output.appendLine(`Saved selection rationale to ${rationaleFile}`);
+    return { commitUrl: "", commitSha: "", repository: `${github.owner}/${github.repo}`, components, rationaleFile, artifacts: outputRoot,
+      title: `Selected code: ${relativeFile}:${selection.startLine}-${selection.endLine}`, sourceCommits,
+      selection: { file: relativeFile, startLine: selection.startLine, endLine: selection.endLine } };
   }
 
   private async getWorkspaceRepoRoot(extensionPath: string, extensionMode: vscode.ExtensionMode): Promise<string> {

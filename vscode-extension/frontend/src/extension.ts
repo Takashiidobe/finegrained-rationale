@@ -13,6 +13,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("rationale.configure", () => openConfigurationPage(context)),
     vscode.commands.registerCommand("rationale.explainCommit", () => explainCommit(context, backend)),
+    vscode.commands.registerCommand("rationale.explainSelection", () => explainSelection(context, backend)),
   );
 
   void backend.install().catch((err) => {
@@ -20,6 +21,48 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showErrorMessage(`Rationale backend setup failed: ${(err as Error).message}`);
   });
   void showFirstUseWelcome(context);
+}
+
+async function explainSelection(context: vscode.ExtensionContext, backend: BackendClient): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.selection.isEmpty) {
+    void vscode.window.showWarningMessage("Select code in an editor before explaining it.");
+    return;
+  }
+  if (editor.document.isDirty) {
+    void vscode.window.showWarningMessage("Save the selected file before explaining it so Git history matches the code.");
+    return;
+  }
+  const selection = editor.selection;
+  const startLine = selection.start.line;
+  const endLine = selection.end.character === 0 && selection.end.line > startLine
+    ? selection.end.line - 1
+    : selection.end.line;
+  const code = editor.document.getText(selection);
+  if (!code.trim()) {
+    void vscode.window.showWarningMessage("The selection does not contain any code.");
+    return;
+  }
+
+  try {
+    const llm = await getLlmConfiguration(context);
+    if (llm.mode === "api" && !llm.apiKey) {
+      const choice = await vscode.window.showWarningMessage("Configure a provider API key before generating rationale.", "Configure");
+      if (choice === "Configure") openConfigurationPage(context);
+      return;
+    }
+    const githubToken = await context.secrets.get(GITHUB_SECRET);
+    const result = await backend.explainSelection({
+      filePath: editor.document.uri.fsPath,
+      startLine: startLine + 1,
+      endLine: endLine + 1,
+      code,
+    }, llm, githubToken);
+    showExplanation(result);
+    void vscode.window.showInformationMessage(`Selection rationale saved to ${result.rationaleFile}.`);
+  } catch (err) {
+    void vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`);
+  }
 }
 
 async function showFirstUseWelcome(context: vscode.ExtensionContext): Promise<void> {

@@ -12,5 +12,7 @@ test('packaged extension points to the frontend and bundles its one-shot Python 
   for (const script of ['artifact_retrieval.py', 'rationale_sentence_identifier.py', 'rationale_generation.py', 'llm_provider.py']) {
     assert.ok(fs.existsSync(path.join(root, 'python', 'scripts', 'ARGUS', script)));
   }
-  assert.ok(fs.existsSync(path.join(root, 'python', 'requirements.txt')));
+  for (const file of ['pyproject.toml', 'uv.lock', 'scripts/ARGUS/runner.py', 'scripts/ARGUS/cli_selftest.py', 'scripts/ARGUS/sentence_splitter.py']) {
+    assert.ok(fs.existsSync(path.join(root, 'python', file)), file);
+  }
 });

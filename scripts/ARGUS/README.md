@@ -37,7 +37,7 @@ This module reads the saved artifacts and converts them into sentence-level reco
 
 In plain terms, it:
 
-- splits artifact text into individual sentences using `en_core_web_trf`
+- splits artifact text into individual sentences with the rule-based splitter in `sentence_splitter.py`
 - assigns a stable sentence ID to each sentence
 - builds the rationale identification prompt
 - asks the LLM to label sentences with `GOAL`, `NEED`, and `ALTERNATIVES`
@@ -522,7 +522,7 @@ So an ID like `42645850_5_3_1` means:
 ## Practical Notes
 
 - Run the modules from the repository root so relative paths to `data/` work correctly.
-- The current implementation uses the `en_core_web_trf` SpaCy model for sentence splitting.
+- Sentence splitting uses the dependency-free, rule-based `sentence_splitter.py`. The original study used the `en_core_web_trf` spaCy model, so sentence boundaries (and therefore sentence IDs) can differ from the published results.
 - The current implementation does not create one wrapper script for all three stages; you run the three modules in sequence.
 - If an intermediate file already exists and you point a later stage directly to it, the later stage will reuse it.
 - The CSV and JSON outputs carry the same information, but JSON preserves Python list structure better for fields like `run_labels`.

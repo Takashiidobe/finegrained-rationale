@@ -1,29 +1,59 @@
 import * as vscode from "vscode";
 import { BackendClient } from "./backend";
+import { CliUpdateRequiredError, offerCliUpdate } from "./cli";
 import { getLlmConfiguration, openConfigurationPage } from "./configuration";
 import { showExplanation } from "./panel";
 
 const GITHUB_SECRET = "githubToken";
 
 export function activate(context: vscode.ExtensionContext): void {
-  const output = vscode.window.createOutputChannel("Rationale");
+  const output = vscode.window.createOutputChannel("Rationale", { log: true });
   const backend = new BackendClient(context, output);
   context.subscriptions.push(backend, output);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("rationale.configure", () => openConfigurationPage(context)),
-    vscode.commands.registerCommand("rationale.explainCommit", () => explainCommit(context, backend)),
-    vscode.commands.registerCommand("rationale.explainSelection", () => explainSelection(context, backend)),
+    vscode.commands.registerCommand("rationale.configure", () => openConfigurationPage(context, backend)),
+    vscode.commands.registerCommand("rationale.explainCommit", () => explainCommit(context, backend, output)),
+    vscode.commands.registerCommand("rationale.explainSelection", () => explainSelection(context, backend, output)),
+    vscode.commands.registerCommand("rationale.showLog", () => output.show()),
+    vscode.commands.registerCommand("rationale.repairBackend", () => repairBackend(backend)),
   );
 
-  void backend.install().catch((err) => {
-    output.appendLine(String(err));
-    void vscode.window.showErrorMessage(`Rationale backend setup failed: ${(err as Error).message}`);
-  });
+  void setUpBackend(backend, () => backend.install());
   void showFirstUseWelcome(context);
 }
 
-async function explainSelection(context: vscode.ExtensionContext, backend: BackendClient): Promise<void> {
+async function setUpBackend(backend: BackendClient, attempt: () => Promise<void>): Promise<void> {
+  try {
+    await attempt();
+  } catch (err) {
+    const choice = await vscode.window.showErrorMessage(`Rationale backend setup failed: ${(err as Error).message}`, "Show Setup Log", "Retry");
+    if (choice === "Show Setup Log") {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(backend.setupLogPath));
+      await vscode.window.showTextDocument(document, { preview: false });
+    }
+    if (choice === "Retry") await setUpBackend(backend, () => backend.install());
+  }
+}
+
+async function repairBackend(backend: BackendClient): Promise<void> {
+  await setUpBackend(backend, async () => {
+    await backend.repair();
+    void vscode.window.showInformationMessage("Rationale backend rebuilt.");
+  });
+}
+
+async function reportFailure(err: unknown, output: vscode.LogOutputChannel): Promise<void> {
+  output.error((err as Error).stack || String(err));
+  if (err instanceof CliUpdateRequiredError) {
+    await offerCliUpdate(err);
+    return;
+  }
+  const choice = await vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`, "Show Log");
+  if (choice === "Show Log") output.show();
+}
+
+async function explainSelection(context: vscode.ExtensionContext, backend: BackendClient, output: vscode.LogOutputChannel): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.selection.isEmpty) {
     void vscode.window.showWarningMessage("Select code in an editor before explaining it.");
@@ -48,7 +78,7 @@ async function explainSelection(context: vscode.ExtensionContext, backend: Backe
     const llm = await getLlmConfiguration(context);
     if (llm.mode === "api" && !llm.apiKey) {
       const choice = await vscode.window.showWarningMessage("Configure a provider API key before generating rationale.", "Configure");
-      if (choice === "Configure") openConfigurationPage(context);
+      if (choice === "Configure") openConfigurationPage(context, backend);
       return;
     }
     const githubToken = await context.secrets.get(GITHUB_SECRET);
@@ -61,7 +91,7 @@ async function explainSelection(context: vscode.ExtensionContext, backend: Backe
     showExplanation(result);
     void vscode.window.showInformationMessage(`Selection rationale saved to ${result.rationaleFile}.`);
   } catch (err) {
-    void vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`);
+    void reportFailure(err, output);
   }
 }
 
@@ -79,7 +109,7 @@ async function showFirstUseWelcome(context: vscode.ExtensionContext): Promise<vo
   if (choice === "Analyze a commit") await vscode.commands.executeCommand("rationale.explainCommit");
 }
 
-async function explainCommit(context: vscode.ExtensionContext, backend: BackendClient): Promise<void> {
+async function explainCommit(context: vscode.ExtensionContext, backend: BackendClient, output: vscode.LogOutputChannel): Promise<void> {
   const commitUrl = await vscode.window.showInputBox({
     prompt: "GitHub commit URL to analyze",
     placeHolder: "https://github.com/owner/repository/commit/<sha>",
@@ -110,7 +140,7 @@ async function explainCommit(context: vscode.ExtensionContext, backend: BackendC
         "Configure",
       );
       if (choice !== "Configure") return;
-      openConfigurationPage(context);
+      openConfigurationPage(context, backend);
       return;
     }
 
@@ -119,7 +149,7 @@ async function explainCommit(context: vscode.ExtensionContext, backend: BackendC
     showExplanation(result);
     void vscode.window.showInformationMessage(`Rationale saved to ${result.rationaleFile}.`);
   } catch (err) {
-    void vscode.window.showErrorMessage(`Rationale: ${(err as Error).message}`);
+    void reportFailure(err, output);
   }
 }
 

@@ -56,7 +56,7 @@ def _generate_with_cli(provider: str, prompt: str, model_name: str) -> str:
 
 def _run_claude_cli(prompt: str, model_name: str, workdir: Path) -> str:
     command = [
-        "claude", "-p", "--input-format", "text", "--output-format", "json", "--model", model_name,
+        "claude", "-p", "--input-format", "text", "--output-format", "json", *_model_flag(model_name),
         "--max-turns", "1", "--safe-mode", "--tools", "", "--disallowedTools", "mcp__*",
     ]
     try:
@@ -77,7 +77,7 @@ def _run_claude_cli(prompt: str, model_name: str, workdir: Path) -> str:
 def _run_codex_cli(prompt: str, model_name: str, workdir: Path) -> str:
     command = [
         "codex", "exec", "--json", "--sandbox", "read-only", "--config", 'approval_policy="never"',
-        "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--model", model_name, "-",
+        "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", *_model_flag(model_name), "-",
     ]
     try:
         result = subprocess.run(command, input=prompt, text=True, capture_output=True, cwd=workdir, check=False, timeout=600)
@@ -101,8 +101,18 @@ def _run_codex_cli(prompt: str, model_name: str, workdir: Path) -> str:
     raise RuntimeError("Codex CLI returned no assistant response. Check that its CLI is installed and signed in.")
 
 
+def _model_flag(model_name: str) -> list[str]:
+    return [] if model_name in ("", "default") else ["--model", model_name]
+
+
 def _cli_error(name: str, result: subprocess.CompletedProcess[str]) -> str:
     detail = (result.stderr or result.stdout).strip()
+    try:
+        message = json.loads(result.stdout).get("result")
+    except (json.JSONDecodeError, AttributeError):
+        message = None
+    if isinstance(message, str) and message.strip():
+        detail = message.strip()
     if not detail:
         detail = "Check that the CLI is installed and signed in."
     return f"{name} failed: {detail}"

@@ -1,0 +1,12 @@
+[project]
+name = "rationale-backend"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic>=0.40,<1",
+    "openai>=1.95,<2",
+    "requests>=2.32,<3",
+]
+
+[tool.uv]
+package = false

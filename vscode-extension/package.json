@@ -2,7 +2,7 @@
   "name": "argus-rationale",
   "displayName": "Rationale Generator",
   "description": "Generate rationale for a GitHub commit.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "SEALab",
   "repository": {
     "type": "git",
@@ -15,10 +15,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onCommand:rationale.explainCommit",
-    "onCommand:rationale.explainSelection",
-    "onCommand:rationale.configure"
+    "onStartupFinished"
   ],
   "main": "./frontend/dist/extension.js",
   "contributes": {
@@ -34,6 +31,14 @@
       {
         "command": "rationale.explainSelection",
         "title": "Rationale: Explain Selected Code"
+      },
+      {
+        "command": "rationale.showLog",
+        "title": "Rationale: Show Log"
+      },
+      {
+        "command": "rationale.repairBackend",
+        "title": "Rationale: Repair Backend"
       }
     ],
     "menus": {
@@ -41,17 +46,17 @@
         {
           "command": "rationale.explainSelection",
           "when": "editorHasSelection && !editorReadonly",
-          "group": "navigation@10"
+          "group": "naviga{tion@10"
         }
       ]
     },
     "configuration": {
       "title": "ARGUS",
       "properties": {
-        "rationale.pythonPath": {
+        "rationale.uvPath": {
           "type": "string",
           "default": "",
-          "description": "Python executable used to create the private backend environment."
+          "description": "Path to a uv executable to use instead of the pinned copy Rationale downloads. Useful on machines that cannot reach GitHub releases."
         },
         "rationale.runs": {
           "type": "number",
@@ -65,7 +70,7 @@
   "scripts": {
     "build": "node build.js && npm --prefix frontend ci && npm --prefix frontend run package",
     "debug": "npm run build && node debug.js",
-    "test": "npm run build && node --test test/*.test.js",
+    "test": "npm run build && node --test test/*.test.js test/*.test.mjs",
     "package": "npm run build && vsce package"
   },
   "devDependencies": {

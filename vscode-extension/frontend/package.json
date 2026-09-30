@@ -23,6 +23,14 @@
       {
         "command": "rationale.explainSelection",
         "title": "Rationale: Explain Selected Code"
+      },
+      {
+        "command": "rationale.showLog",
+        "title": "Rationale: Show Log"
+      },
+      {
+        "command": "rationale.repairBackend",
+        "title": "Rationale: Repair Backend"
       }
     ],
     "menus": {
@@ -37,10 +45,10 @@
     "configuration": {
       "title": "Rationale",
       "properties": {
-        "rationale.pythonPath": {
+        "rationale.uvPath": {
           "type": "string",
           "default": "",
-          "description": "Python executable used to create the private backend environment."
+          "description": "Path to a uv executable to use instead of the pinned copy Rationale downloads. Useful on machines that cannot reach GitHub releases."
         },
         "rationale.runs": {
           "type": "number",

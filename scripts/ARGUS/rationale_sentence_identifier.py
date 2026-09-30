@@ -2,15 +2,13 @@ import argparse
 import csv
 import io
 import json
-import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import spacy
-
 from csv_utils import read_csv_rows, write_csv_rows
 from llm_provider import generate_text
+from sentence_splitter import split_sentences
 from artifact_retrieval import (
     DEFAULT_OUTPUT_ROOT,
     get_commit_output_dir,
@@ -169,19 +167,6 @@ def read_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, payload: Any) -> None:
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
-
-
-def get_nlp():
-    if not hasattr(get_nlp, "_model"):
-        get_nlp._model = spacy.load(os.environ.get("ARGUS_SPACY_MODEL", "en_core_web_trf"))
-    return get_nlp._model
-
-
-def split_sentences(text: str | None) -> list[str]:
-    if not text:
-        return []
-    doc = get_nlp()(text)
-    return [sentence.text.strip() for sentence in doc.sents if sentence.text.strip()]
 
 
 def build_sentence_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -3,7 +3,13 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { ensureSupportedCli } from "./cli";
+import type { CliProvider } from "./cliVersion";
 import type { LlmConfiguration } from "./configuration";
+import { summarizeFailure } from "./failure";
+import { ensureUv } from "./uv";
+
+const PYTHON_VERSION = "3.14";
 
 export interface ExplainResult {
   commitUrl: string;
@@ -29,7 +35,7 @@ function parseGitHubRemote(remote: string): { owner: string; repo: string } | un
 }
 
 function buildLlmEnvironment(llm: LlmConfiguration, githubToken?: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, ARGUS_LLM_MODE: llm.mode, ARGUS_LLM_PROVIDER: llm.provider, ARGUS_SPACY_MODEL: "en_core_web_sm" };
+  const env: NodeJS.ProcessEnv = { ...process.env, ARGUS_LLM_MODE: llm.mode, ARGUS_LLM_PROVIDER: llm.provider };
   if (llm.apiKey) env.ARGUS_LLM_API_KEY = llm.apiKey;
   if (llm.mode === "api" && llm.provider === "openai" && llm.apiKey) {
     env.OPENAI_API_KEY = llm.apiKey;
@@ -49,32 +55,55 @@ function buildLlmEnvironment(llm: LlmConfiguration, githubToken?: string): NodeJ
 }
 
 export class BackendClient implements vscode.Disposable {
+  private readonly storageDir: string;
   private readonly runtimeDir: string;
+  private readonly envDir: string;
   private readonly python: string;
   private readonly pythonRoot: string;
   private readonly extensionPath: string;
   private readonly extensionMode: vscode.ExtensionMode;
+  readonly setupLogPath: string;
   private setup: Promise<void> | undefined;
 
   dispose(): void {}
 
   constructor(
     context: vscode.ExtensionContext,
-    private readonly output: vscode.OutputChannel,
+    private readonly output: vscode.LogOutputChannel,
   ) {
-    this.runtimeDir = path.join(context.globalStorageUri.fsPath, "runtime");
+    this.storageDir = context.globalStorageUri.fsPath;
+    this.runtimeDir = path.join(this.storageDir, "runtime");
+    this.envDir = path.join(this.storageDir, "env");
+    this.setupLogPath = path.join(this.storageDir, "logs", "setup.log");
     this.extensionPath = context.extensionPath;
     this.extensionMode = context.extensionMode;
     this.pythonRoot = path.join(context.extensionPath, "python");
-    const venv = path.join(context.globalStorageUri.fsPath, "venv");
     this.python = process.platform === "win32"
-      ? path.join(venv, "Scripts", "python.exe")
-      : path.join(venv, "bin", "python");
+      ? path.join(this.envDir, "Scripts", "python.exe")
+      : path.join(this.envDir, "bin", "python");
   }
 
-  async install(): Promise<void> {
-    if (!this.setup) this.setup = this.installRuntime();
+  install(): Promise<void> {
+    if (!this.setup) {
+      this.setup = this.installRuntime().catch((error) => {
+        this.setup = undefined;
+        throw error;
+      });
+    }
     return this.setup;
+  }
+
+  async repair(): Promise<void> {
+    await this.setup?.catch(() => undefined);
+    this.setup = undefined;
+    await fs.rm(this.envDir, { recursive: true, force: true });
+    return this.install();
+  }
+
+  async selfTest(llm: LlmConfiguration): Promise<void> {
+    if (llm.mode === "cli") await ensureSupportedCli(llm.provider as CliProvider);
+    await this.install();
+    await this.runScript("cli_selftest.py", ["--model", llm.model], buildLlmEnvironment(llm));
   }
 
   async findExistingRationale(commitUrl: string): Promise<string | undefined> {
@@ -91,62 +120,76 @@ export class BackendClient implements vscode.Disposable {
   }
 
   private async installRuntime(): Promise<void> {
-    const config = vscode.workspace.getConfiguration("rationale");
-    const configuredPython = config.get<string>("pythonPath", "");
-    const bootstrapPython = configuredPython || (process.platform === "win32" ? "python" : "python3");
     await fs.mkdir(this.runtimeDir, { recursive: true });
+    await fs.mkdir(path.dirname(this.setupLogPath), { recursive: true });
+    await fs.rm(path.join(this.storageDir, "venv"), { recursive: true, force: true });
+    const transcript: string[] = [`Rationale backend setup ${new Date().toISOString()}\n`];
+    const firstRun = !(await fs.access(this.python).then(() => true, () => false));
+    const setUp = async (progress?: vscode.Progress<{ message?: string }>): Promise<void> => {
+      const configuredUv = vscode.workspace.getConfiguration("rationale").get<string>("uvPath", "");
+      progress?.report({ message: "Downloading uv" });
+      const uv = configuredUv || await ensureUv(this.storageDir, (line) => this.log(line, transcript));
+      progress?.report({ message: `Installing Python ${PYTHON_VERSION} and dependencies` });
+      await this.syncEnvironment(uv, transcript);
+      try {
+        await this.run(this.python, ["-c", "import anthropic, openai, requests"], process.env, undefined, transcript);
+      } catch {
+        this.log("Backend environment is incomplete; rebuilding it.", transcript);
+        await fs.rm(this.envDir, { recursive: true, force: true });
+        await this.syncEnvironment(uv, transcript);
+        await this.run(this.python, ["-c", "import anthropic, openai, requests"], process.env, undefined, transcript);
+      }
+    };
     try {
-      await fs.access(this.python);
-    } catch {
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: "Setting up Rationale backend…", cancellable: false },
-        async (progress) => {
-          progress.report({ message: "Creating Python environment" });
-          await this.run(bootstrapPython, ["-m", "venv", path.dirname(path.dirname(this.python))]);
-          await this.installDependencies(progress);
-        },
-      );
-      return;
+      if (firstRun) {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Setting up Rationale backend…", cancellable: false },
+          setUp,
+        );
+      } else {
+        await setUp();
+      }
+      transcript.push("Setup succeeded.\n");
+    } catch (error) {
+      transcript.push(`Setup failed: ${(error as Error).message}\n`);
+      this.output.error(`Backend setup failed: ${(error as Error).message}`);
+      throw error;
+    } finally {
+      await fs.writeFile(this.setupLogPath, transcript.join(""), "utf8").catch(() => undefined);
     }
-    await this.installDependencies();
   }
 
-  private async installDependencies(progress?: vscode.Progress<{ message?: string }>): Promise<void> {
-    const requirementsPath = path.join(this.pythonRoot, "requirements.txt");
-    const requirements = await fs.readFile(requirementsPath);
-    const fingerprint = createHash("sha256").update(requirements).digest("hex");
-    const marker = path.join(path.dirname(path.dirname(this.python)), ".rationale-deps-installed");
-    try {
-      if ((await fs.readFile(marker, "utf8")) === fingerprint) return;
-    } catch {}
-    progress?.report({ message: "Installing backend dependencies" });
-    await this.run(this.python, ["-m", "pip", "install", "-r", requirementsPath]);
-    await fs.writeFile(marker, fingerprint);
+  private syncEnvironment(uv: string, transcript: string[]): Promise<void> {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      UV_PROJECT_ENVIRONMENT: this.envDir,
+      UV_PYTHON_INSTALL_DIR: path.join(this.storageDir, "python"),
+      UV_CACHE_DIR: path.join(this.storageDir, "uv-cache"),
+      UV_NO_PROGRESS: "1",
+    };
+    const args = ["sync", "--frozen", "--no-dev", "--project", this.pythonRoot, "--python", PYTHON_VERSION, "--managed-python"];
+    return this.run(uv, args, env, undefined, transcript);
+  }
+
+  private runScript(script: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
+    const scriptsDir = path.join(this.pythonRoot, "scripts", "ARGUS");
+    return this.run(this.python, [path.join(scriptsDir, "runner.py"), path.join(scriptsDir, script), ...args], env, this.pythonRoot);
+  }
+
+  private log(line: string, transcript?: string[]): void {
+    this.output.info(line);
+    transcript?.push(`${line}\n`);
   }
 
   async explainCommit(commitUrl: string, llm: LlmConfiguration, githubToken?: string): Promise<ExplainResult> {
     const repoRoot = await this.getWorkspaceRepoRoot(this.extensionPath, this.extensionMode);
+    if (llm.mode === "cli") await ensureSupportedCli(llm.provider as CliProvider);
     await this.install();
     const outputRoot = path.join(this.runtimeDir, "results");
     const baseArgs = ["--commit-url", commitUrl, "--output-root", outputRoot];
     const model = llm.model;
     const runs = String(Math.max(1, Math.floor(vscode.workspace.getConfiguration("rationale").get<number>("runs", 1))));
-    const env: NodeJS.ProcessEnv = { ...process.env, ARGUS_LLM_MODE: llm.mode, ARGUS_LLM_PROVIDER: llm.provider, ARGUS_SPACY_MODEL: "en_core_web_sm" };
-    if (llm.apiKey) env.ARGUS_LLM_API_KEY = llm.apiKey;
-    if (llm.mode === "api" && llm.provider === "openai" && llm.apiKey) {
-      env.OPENAI_API_KEY = llm.apiKey;
-      env.OPENAI_TOKEN = llm.apiKey;
-    }
-    if (llm.mode === "cli") {
-      delete env.OPENAI_API_KEY;
-      delete env.OPENAI_TOKEN;
-      delete env.CODEX_API_KEY;
-      delete env.ANTHROPIC_API_KEY;
-      delete env.ANTHROPIC_AUTH_TOKEN;
-      delete env.ANTHROPIC_BASE_URL;
-      delete env.OPENAI_BASE_URL;
-    }
-    if (githubToken) env.GITHUB_TOKEN = githubToken;
+    const env = buildLlmEnvironment(llm, githubToken);
     const scripts = ["artifact_retrieval.py", "rationale_sentence_identifier.py", "rationale_generation.py"];
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Generating rationale…", cancellable: false },
@@ -156,7 +199,7 @@ export class BackendClient implements vscode.Disposable {
           const stageArgs = script === "artifact_retrieval.py"
             ? baseArgs
             : [...baseArgs, "--model", model, ...(script === "rationale_sentence_identifier.py" ? ["--runs", runs] : [])];
-          await this.run(this.python, [path.join(this.pythonRoot, "scripts", "ARGUS", script), ...stageArgs], env, this.pythonRoot);
+          await this.runScript(script, stageArgs, env);
         }
       },
     );
@@ -228,6 +271,7 @@ export class BackendClient implements vscode.Disposable {
     const remote = (await this.capture("git", ["-C", repoRoot, "config", "--get", "remote.origin.url"])).trim();
     const github = parseGitHubRemote(remote);
     if (!github) throw new Error("The repository origin must be a GitHub URL to retrieve commit rationale.");
+    if (llm.mode === "cli") await ensureSupportedCli(llm.provider as CliProvider);
     await this.install();
     const outputRoot = path.join(this.runtimeDir, "results");
     const sourceCommits = commits.map(([sha, lines]) => ({ sha, lines, url: `https://github.com/${github.owner}/${github.repo}/commit/${sha}` }));
@@ -243,7 +287,7 @@ export class BackendClient implements vscode.Disposable {
             progress.report({ message: `Commit ${commitIndex + 1}/${sourceCommits.length}: ${["Retrieving GitHub artifacts", "Identifying rationale sentences", "Generating commit summary"][index]}` });
             const base = ["--commit-url", commit.url, "--output-root", outputRoot];
             const args = script === "artifact_retrieval.py" ? base : [...base, "--model", model, ...(script === "rationale_sentence_identifier.py" ? ["--runs", runs] : [])];
-            await this.run(this.python, [path.join(this.pythonRoot, "scripts", "ARGUS", script), ...args], env, this.pythonRoot);
+            await this.runScript(script, args, env);
           }
         }
       },
@@ -255,7 +299,7 @@ export class BackendClient implements vscode.Disposable {
       start_line: selection.startLine, end_line: selection.endLine, code: selection.code,
       commits: sourceCommits.map((commit) => ({ ...commit, summary_path: path.join(outputRoot, `${github.owner}__${github.repo}__${commit.sha.slice(0, 12)}`, "rationale_summary.json") })),
     }), "utf8");
-    await this.run(this.python, [path.join(this.pythonRoot, "scripts", "ARGUS", "selection_synthesis.py"), "--input", inputPath, "--output", resultPath, "--model", model], env, this.pythonRoot);
+    await this.runScript("selection_synthesis.py", ["--input", inputPath, "--output", resultPath, "--model", model], env);
     const summary = JSON.parse(await fs.readFile(resultPath, "utf8")) as { components?: Record<string, string> };
     const components = { GOAL: summary.components?.GOAL || "", NEED: summary.components?.NEED || "", ALTERNATIVES: summary.components?.ALTERNATIVES || "" };
     const rationaleFile = path.join(repoRoot, ".rationale", github.owner, github.repo, `selection-${createHash("sha256").update(`${relativeFile}:${selection.startLine}:${selection.endLine}`).digest("hex").slice(0, 12)}.md`);
@@ -302,14 +346,21 @@ export class BackendClient implements vscode.Disposable {
     });
   }
 
-  private run(command: string, args: string[], env = process.env, cwd?: string): Promise<void> {
+  private run(command: string, args: string[], env = process.env, cwd?: string, transcript?: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.output.appendLine(`$ ${command} ${args.join(" ")}`);
+      this.log(`$ ${command} ${args.join(" ")}`, transcript);
       const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-      child.stdout?.on("data", (data) => this.output.append(data.toString()));
-      child.stderr?.on("data", (data) => this.output.append(data.toString()));
-      child.on("error", reject);
-      child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`Backend process exited with code ${code}. See the Rationale output channel.`)));
+      let stderr = "";
+      const record = (data: Buffer): string => {
+        const text = data.toString();
+        for (const line of text.split(/\r?\n/)) if (line.trim()) this.output.info(line);
+        transcript?.push(text);
+        return text;
+      };
+      child.stdout?.on("data", record);
+      child.stderr?.on("data", (data: Buffer) => { stderr = (stderr + record(data)).slice(-16384); });
+      child.on("error", (error) => reject(new Error(`Could not start ${path.basename(command)}: ${error.message}`)));
+      child.on("close", (code) => code === 0 ? resolve() : reject(new Error(summarizeFailure(stderr, code))));
     });
   }
 }

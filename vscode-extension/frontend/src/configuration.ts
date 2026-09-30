@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { spawn } from "node:child_process";
+import type { BackendClient } from "./backend";
+import { CliUpdateRequiredError, ensureSupportedCli, offerCliUpdate, runCommand } from "./cli";
 
 export type RunMode = "api" | "cli";
 export type Provider = "openai" | "anthropic" | "codex" | "claude-code";
@@ -38,7 +39,9 @@ export async function getLlmConfiguration(context: vscode.ExtensionContext): Pro
   };
 }
 
-export function openConfigurationPage(context: vscode.ExtensionContext): void {
+const CLI_DEFAULT_MODEL = { id: "default", name: "CLI default (whatever the CLI is configured to use)" };
+
+export function openConfigurationPage(context: vscode.ExtensionContext, backend: BackendClient): void {
   const panel = vscode.window.createWebviewPanel("rationale.configuration", "Rationale Configuration", vscode.ViewColumn.One, {
     enableScripts: true,
     retainContextWhenHidden: true,
@@ -113,6 +116,7 @@ export function openConfigurationPage(context: vscode.ExtensionContext): void {
         panel.webview.postMessage({ type: "validation", valid: true, models, current: context.globalState.get<string>(`model:${provider}`, ""), message: `CLI found. Loaded ${models.length} model choices. Sign in through the CLI if you have not already.` });
       } catch (error) {
         panel.webview.postMessage({ type: "validation", valid: false, message: `Could not load the CLI: ${(error as Error).message}` });
+        if (error instanceof CliUpdateRequiredError) void offerCliUpdate(error);
       }
       return;
     }
@@ -136,6 +140,16 @@ export function openConfigurationPage(context: vscode.ExtensionContext): void {
     const validProviders: Provider[] = mode === "api" ? ["openai", "anthropic"] : ["codex", "claude-code"];
     const provider = validProviders.includes(message.provider as Provider) ? message.provider as Provider : validProviders[0];
     const model = typeof message.model === "string" && message.model.trim() ? message.model.trim() : defaults[provider].model;
+    if (mode === "cli") {
+      panel.webview.postMessage({ type: "status", message: `Sending a test prompt through the CLI with model "${model}"…` });
+      try {
+        await backend.selfTest({ mode, provider, model });
+      } catch (error) {
+        panel.webview.postMessage({ type: "saveFailed", message: `Not saved. The CLI test failed: ${(error as Error).message}` });
+        if (error instanceof CliUpdateRequiredError) void offerCliUpdate(error);
+        return;
+      }
+    }
     await context.globalState.update(MODE_KEY, mode);
     await context.globalState.update(PROVIDER_KEY, provider);
     await context.globalState.update(`model:${provider}`, model);
@@ -210,22 +224,26 @@ async function fetchApiModels(provider: Provider, apiKey?: string): Promise<Arra
 }
 
 async function fetchCliModels(provider: Provider): Promise<Array<{ id: string; name: string }>> {
+  if (provider !== "codex" && provider !== "claude-code") throw new Error("Unknown CLI provider");
+  await ensureSupportedCli(provider);
   if (provider === "claude-code") {
-    await runCommand("claude", ["--version"]);
     return [
-      { id: "default", name: "Default (account-selected)" },
+      CLI_DEFAULT_MODEL,
       { id: "claude-fable-5-1", name: "Claude Fable 5.1" },
       { id: "claude-opus-5-5", name: "Claude Opus 5.5" },
-      { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
-      { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+      { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
+      { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
       { id: "opus", name: "Opus (account alias)" },
       { id: "sonnet", name: "Sonnet (account alias)" },
       { id: "haiku", name: "Haiku (account alias)" },
     ];
   }
-  if (provider !== "codex") throw new Error("Unknown CLI provider");
-  const result = await runCodexModelList();
-  const decoded = JSON.parse(result) as unknown;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(await runCommand("codex", ["debug", "models"]));
+  } catch {
+    return [CLI_DEFAULT_MODEL];
+  }
   const found: Array<{ id: string; name: string }> = [];
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
@@ -242,25 +260,8 @@ async function fetchCliModels(provider: Provider): Promise<Array<{ id: string; n
     }
   };
   visit(decoded);
-    const unique = [...new Map(found.map((model) => [model.id, model])).values()];
-  if (!unique.length) throw new Error("Codex returned no model catalog");
-  return unique;
-}
-
-function runCodexModelList(): Promise<string> {
-  return runCommand("codex", ["debug", "models"]);
-}
-
-function runCommand(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${command} exited with code ${code}`)));
-  });
+  const unique = [...new Map(found.map((model) => [model.id, model])).values()];
+  return [CLI_DEFAULT_MODEL, ...unique];
 }
 
 function getHtml(cspSource: string, nonce: string): string {
@@ -549,6 +550,7 @@ function getHtml(cspSource: string, nonce: string): string {
         if (message.setupComplete) byId(rootId).querySelector('#model-status').textContent = 'Loading models from the selected provider…';
       }
       if (message.type === 'validation') setValidatedModels(message);
+      if (message.type === 'status' || message.type === 'saveFailed') byId('status').textContent = message.message;
       if (message.type === 'models') {
         populateModels('returning-config', message.models || [], message.current, message.message);
         validated = !message.message.startsWith('Model refresh failed:');

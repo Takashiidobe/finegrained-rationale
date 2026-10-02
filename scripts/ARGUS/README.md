@@ -63,12 +63,19 @@ In plain terms, it:
 - builds the rationale generation prompt
 - asks the LLM to write `GOAL`, `NEED`, and `ALTERNATIVES` summaries
 - saves both the raw text response and a structured JSON version
+- asks for inline source footnote markers and validates them against the identified sentences
 
 Its outputs are:
 
 - `rationale_generation_prompt.txt`
 - `rationale_summary.txt`
 - `rationale_summary.json`
+
+The summary JSON includes `references` derived from
+`identified_rationale_sentences.csv`: the original sentence ID, source type,
+source URL, evidence sentence, and component labels. Valid inline footnote
+markers in `components` use these reference IDs. The VS Code extension turns
+them into numbered Markdown footnotes and preserves the original source links.
 
 ## Inputs
 

@@ -6,6 +6,7 @@ from typing import Any
 
 
 from csv_utils import read_csv_rows
+from rationale_sources import build_references, citation_id, citation_instructions, resolve_component_citations
 from llm_provider import generate_text
 from artifact_retrieval import DEFAULT_OUTPUT_ROOT, get_commit_output_dir, resolve_commit_coordinates
 from rationale_sentence_identifier import ensure_artifacts_file, identify_rationale_sentences
@@ -130,7 +131,8 @@ def generate_rationale_summary(
     response_text = request_openai_response(prompt, model_name)
     (output_dir / "rationale_summary.txt").write_text(response_text, encoding="utf-8")
 
-    parsed_components = parse_rationale_response(response_text)
+    references = build_references(identified_rows)
+    parsed_components = resolve_component_citations(parse_rationale_response(response_text), references)
     payload = {
         "commit_id": artifacts["commit_id"],
         "commit_url": artifacts["commit_url"],
@@ -138,6 +140,7 @@ def generate_rationale_summary(
         "prompt_strategy": prompt_strategy,
         "raw_response": response_text,
         "components": parsed_components,
+        "references": references,
     }
 
     output_path = output_dir / "rationale_summary.json"
@@ -179,7 +182,7 @@ def build_generation_prompt(
         .replace("<code_diff_information>", code_diff_information)
         .replace("<sentences_information>", sentences_information)
         .replace("<sentence_count>", str(len(identified_rows)))
-    )
+    ) + citation_instructions(build_references(identified_rows))
 
 
 def format_identified_sentences_for_prompt(template: str, rows: list[dict[str, Any]]) -> str:
@@ -202,7 +205,7 @@ def format_identified_sentences_for_prompt(template: str, rows: list[dict[str, A
         formatted_rows = []
         for row in group:
             formatted_rows.append(
-                template.replace("<index>", str(row["id"]))
+                template.replace("<index>", citation_id(row))
                 .replace("<source>", str(row["source"]))
                 .replace("<sentence>", str(row["sentence"]))
                 .replace("<labels>", str(row["final_labels"]))

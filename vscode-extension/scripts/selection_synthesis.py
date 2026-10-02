@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from llm_provider import generate_text
+from rationale_sources import citation_instructions, resolve_component_citations
 
 
 def parse_args() -> argparse.Namespace:
@@ -17,9 +18,12 @@ def main() -> None:
     args = parse_args()
     data = json.loads(Path(args.input).read_text(encoding="utf-8"))
     commit_context = []
+    references = {}
     for commit in data["commits"]:
         summary = json.loads(Path(commit["summary_path"]).read_text(encoding="utf-8"))
         components = summary.get("components", {})
+        for reference in summary.get("references", []):
+            references[reference["id"]] = reference
         commit_context.append(
             f"Commit: {commit['sha']} ({commit['lines']} selected lines)\n"
             f"URL: {commit['url']}\n"
@@ -45,11 +49,17 @@ Return exactly these three labels, each followed by a concise paragraph:
 GOAL: ...
 NEED: ...
 ALTERNATIVES: ..."""
+    sources = list(references.values())
+    if sources:
+        prompt += "\n\nOriginal evidence:\n" + "\n".join(
+            f"Id: {ref['id']}\nSource: {ref['source']}\nSentence: {ref['sentence']}" for ref in sources
+        ) + citation_instructions(sources)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     (output_path.parent / f"{output_path.stem}.prompt.txt").write_text(prompt, encoding="utf-8")
     response = generate_text(prompt, args.model)
-    output_path.write_text(json.dumps({"raw_response": response, "components": parse_components(response)}, indent=2), encoding="utf-8")
+    components = resolve_component_citations(parse_components(response), sources)
+    output_path.write_text(json.dumps({"raw_response": response, "components": components, "references": sources}, indent=2), encoding="utf-8")
 
 
 def parse_components(text: str) -> dict[str, str]:

@@ -3,6 +3,29 @@ import { test } from 'node:test';
 import { UV_SHA256, uvAssetName, uvTarget } from '../frontend/src/uv.ts';
 import { checkCliVersion, MIN_CLI_VERSIONS } from '../frontend/src/cliVersion.ts';
 import { summarizeFailure } from '../frontend/src/failure.ts';
+import { getGitHubCommitUrl, isCommitHash, parseGitHubRemote } from '../frontend/src/commitInput.ts';
+
+test('commit input accepts full and abbreviated hashes but rejects refs and shell input', () => {
+  for (const value of ['abc1234', 'A'.repeat(40), ' abc1234\n']) assert.equal(isCommitHash(value), true);
+  for (const value of ['', 'abc123', 'a'.repeat(41), 'HEAD', 'main', 'abc1234;whoami']) assert.equal(isCommitHash(value), false);
+});
+
+test('GitHub commit URLs are normalized before being passed to the backend', () => {
+  assert.equal(getGitHubCommitUrl(' https://github.com/owner/repo/commit/ABC1234/\n'), 'https://github.com/owner/repo/commit/abc1234');
+  assert.equal(getGitHubCommitUrl('https://github.com/owner/repo/commit/abc1234?diff=split#diff-123'), 'https://github.com/owner/repo/commit/abc1234');
+  for (const value of ['abc1234', 'https://github.com/owner/repo', 'https://github.com/owner/repo/pull/123', 'https://github.com.evil.com/owner/repo/commit/abc1234']) {
+    assert.equal(getGitHubCommitUrl(value), undefined);
+  }
+});
+
+test('GitHub origin parsing supports HTTPS and SSH and rejects other hosts', () => {
+  for (const remote of ['https://github.com/owner/repo.git', 'https://github.com/owner/repo/', 'git@github.com:owner/repo.git', 'ssh://git@github.com/owner/repo.git\n']) {
+    assert.deepEqual(parseGitHubRemote(remote), { owner: 'owner', repo: 'repo' });
+  }
+  for (const remote of ['https://gitlab.com/owner/repo.git', 'https://notgithub.com/owner/repo.git', 'https://evil.com/github.com/owner/repo.git', '/local/repo']) {
+    assert.equal(parseGitHubRemote(remote), undefined);
+  }
+});
 
 test('uvTarget maps supported platforms to uv release triples', () => {
   assert.equal(uvTarget('linux', 'x64', false), 'x86_64-unknown-linux-gnu');

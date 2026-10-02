@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { BackendClient } from "./backend";
 import { CliUpdateRequiredError, offerCliUpdate } from "./cli";
+import { getGitHubCommitUrl, isCommitHash } from "./commitInput";
 import { getLlmConfiguration, openConfigurationPage } from "./configuration";
 import { showExplanation } from "./panel";
 
@@ -110,14 +111,15 @@ async function showFirstUseWelcome(context: vscode.ExtensionContext): Promise<vo
 }
 
 async function explainCommit(context: vscode.ExtensionContext, backend: BackendClient, output: vscode.LogOutputChannel): Promise<void> {
-  const commitUrl = await vscode.window.showInputBox({
-    prompt: "GitHub commit URL to analyze",
-    placeHolder: "https://github.com/owner/repository/commit/<sha>",
-    validateInput: (value) => /^https:\/\/github\.com\/[^/]+\/[^/]+\/commit\/[a-fA-F0-9]+$/.test(value) ? undefined : "Enter a GitHub commit URL.",
+  const input = await vscode.window.showInputBox({
+    prompt: "Commit hash or GitHub commit URL to analyze (hashes use the repository's origin)",
+    placeHolder: "abc1234 or https://github.com/owner/repository/commit/<sha>",
+    validateInput: (value) => isCommitHash(value) || getGitHubCommitUrl(value) ? undefined : "Enter a commit hash (7–40 hexadecimal characters) or a GitHub commit URL.",
   });
-  if (!commitUrl) return;
+  if (!input) return;
 
   try {
+    const commitUrl = await backend.resolveCommitUrl(input);
     const existingRationale = await backend.findExistingRationale(commitUrl);
     if (existingRationale) {
       const choice = await vscode.window.showInformationMessage(

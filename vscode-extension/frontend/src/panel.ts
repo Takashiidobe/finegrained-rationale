@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { ExplainResult } from "./backend";
+import { referenceLabel, type RationaleComponent } from "./references";
 
 let panel: vscode.WebviewPanel | undefined;
 
@@ -46,11 +47,18 @@ export function showExplanation(result: ExplainResult): void {
     : commitUrl
       ? `<a href="${escapeHtml(commitUrl)}"><code>${escapeHtml(result.commitSha.slice(0, 12))}</code></a>`
       : `<code>${escapeHtml(result.commitSha.slice(0, 12))}</code>`;
-  const component = (label: string, value: string): string => `
+  const references = result.references || [];
+  const marker = (number: number): string => references.some(reference => reference.number === number)
+    ? `<sup><a href="#source-${number}">${number}</a></sup>` : "";
+  const renderText = (value: string): string => escapeHtml(value).replace(/\[\^(\d+)\]/g, (_, number: string) => marker(Number(number)));
+  const component = (label: string, value: string, key: RationaleComponent): string => `
     <section>
       <h2>${label}</h2>
-      <p>${escapeHtml(value || "Not identified.")}</p>
+      <p>${renderText(value || "Not identified.")}</p>
+      ${result.evidence?.[key]?.length ? `<p class="muted">ARGUS ${key} evidence: ${result.evidence[key]!.map(marker).join(" ")}</p>` : ""}
     </section>`;
+  const sources = references.length ? `<section><h2>References</h2><ol>${references.map(reference => `
+    <li id="source-${reference.number}"><a href="${escapeHtml(reference.url)}">${escapeHtml(referenceLabel(reference.source))}</a> · ARGUS sentence <code>${escapeHtml(reference.sentenceId)}</code><p>${escapeHtml(reference.sentence)}</p></li>`).join("")}</ol></section>` : "";
   p.webview.html = `<!DOCTYPE html>
 <html>
   <head>
@@ -69,9 +77,10 @@ export function showExplanation(result: ExplainResult): void {
   <body>
     <h1>${escapeHtml(result.title || "Commit rationale")}</h1>
     <p class="muted">${escapeHtml(result.repository)} · ${commit}</p>
-    ${component("GOAL", result.components.GOAL)}
-    ${component("NEED", result.components.NEED)}
-    ${component("ALTERNATIVE", result.components.ALTERNATIVES)}
+    ${component("GOAL", result.components.GOAL, "GOAL")}
+    ${component("NEED", result.components.NEED, "NEED")}
+    ${component("ALTERNATIVE", result.components.ALTERNATIVES, "ALTERNATIVES")}
+    ${sources}
     <p class="muted">Saved to <code>${escapeHtml(result.rationaleFile)}</code></p>
   </body>
 </html>`;

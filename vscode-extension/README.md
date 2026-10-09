@@ -30,7 +30,17 @@ Key from OpenAI or Anthropic or a signed-in Codex or Claude Code CLI,
 select a model, and test the connection before saving.
 
 GitHub access is optional for public repositories and required for private
-ones. Add a token with access to the repository when prompted.
+ones.
+
+If you want to use this extension for a private repo, add a token with
+access to the repository so ARGUS can gather its artifacts. To create a
+fine-grained token, open
+[GitHub's token settings](https://github.com/settings/personal-access-tokens),
+choose the private repository under **Repository access**, and grant
+read-only access to **Contents**, **Issues**, and **Pull requests** under
+**Repository permissions**. Generate and copy the token, then paste it into
+the GitHub access field in Rationale's configuration. A classic token needs
+the `repo` scope instead.
 
 ## Troubleshooting
 
@@ -38,8 +48,9 @@ Setup and analysis errors appear in the **Rationale** output channel. Run
 **Rationale: Show Log** to view it. For backend setup problems, run
 **Rationale: Repair Backend**.
 
-When reporting a problem, include your Rationale and VS Code versions and the
-error from the output channel.
+When reporting a problem, attach your Rationale and VS Code versions and the
+error from the output channel and create a [new issue]
+(https://github.com/sea-lab-wm/finegrained-rationale/issues/new).
 
 ## Settings
 

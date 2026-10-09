@@ -2,7 +2,7 @@
   "name": "argus-rationale",
   "displayName": "Rationale Generator",
   "description": "Generate rationale for a GitHub commit.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "SEALab",
   "repository": {
     "type": "git",

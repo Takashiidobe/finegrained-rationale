@@ -68,7 +68,7 @@ export function formatRationale(summary: RationaleSummary): {
       if (!reference || !reference.labels.includes(label)) return "";
       cited = true;
       return `[^${useReference(reference)}]`;
-    }).trim();
+    }).replace(/\]\[\^/g, "], [^").trim();
     sections.push(`## ${label === "ALTERNATIVES" ? "ALTERNATIVE" : label}`, "", components[label] || "Not identified.", "");
     if (components[label] && !cited) {
       const numbers = [...new Set(available.filter(reference => reference.labels.includes(label)).map(useReference))];
@@ -83,7 +83,7 @@ export function formatRationale(summary: RationaleSummary): {
     sections.push("## References", "");
     for (const reference of references) {
       const url = new URL(reference.url).toString().replace(/</g, "%3C").replace(/>/g, "%3E");
-      sections.push(`[^${reference.number}]: [${escapeMarkdown(referenceLabel(reference.source))}](<${url}>) — ARGUS sentence \`${reference.sentenceId}\`: “${escapeMarkdown(reference.sentence)}”`, "");
+      sections.push(`[^${reference.number}]: [${escapeMarkdown(referenceLabel(reference.source))}](<${url}>) — “${escapeMarkdown(reference.sentence)}”`, "");
     }
   }
   return { components, references, evidence, markdown: sections.join("\n") };

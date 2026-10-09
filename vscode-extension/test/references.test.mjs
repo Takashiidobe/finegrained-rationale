@@ -18,7 +18,7 @@ test('claims get numbered footnotes with original source anchors, IDs, and quote
   assert.equal(result.components.NEED, 'The firewall was lost.[^2] This fixes it.[^1]');
   assert.equal(result.references.length, 2);
   assert.match(result.markdown, /\[\^2\]: \[Issue\]\(<https:\/\/github.com\/owner\/repo\/issues\/42#issuecomment-123>\)/);
-  assert.ok(result.markdown.includes('ARGUS sentence `12_5_3_0`: “The old implementation silently drops the custom firewall.”'));
+  assert.ok(result.markdown.includes('— “The old implementation silently drops the custom firewall.”'));
   assert.deepEqual(result.evidence, {});
 });
 
@@ -60,7 +60,7 @@ test('source quotes remain literal Markdown text and unsafe URLs are excluded', 
 test('duplicate references reuse one definition', () => {
   const duplicate = { ...need, id: 'def5678-12_5_3_0' };
   const result = formatRationale({ components: { NEED: `Repeated.[^${need.id}][^${duplicate.id}]` }, references: [need, duplicate] });
-  assert.equal(result.components.NEED, 'Repeated.[^1][^1]');
+  assert.equal(result.components.NEED, 'Repeated.[^1], [^1]');
   assert.equal(result.references.length, 1);
   assert.equal((result.markdown.match(/\[\^1\]:/g) || []).length, 1);
 });

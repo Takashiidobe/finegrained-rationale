@@ -58,7 +58,7 @@ export function showExplanation(result: ExplainResult): void {
       ${result.evidence?.[key]?.length ? `<p class="muted">ARGUS ${key} evidence: ${result.evidence[key]!.map(marker).join(" ")}</p>` : ""}
     </section>`;
   const sources = references.length ? `<section><h2>References</h2><ol>${references.map(reference => `
-    <li id="source-${reference.number}"><a href="${escapeHtml(reference.url)}">${escapeHtml(referenceLabel(reference.source))}</a> · ARGUS sentence <code>${escapeHtml(reference.sentenceId)}</code><p>${escapeHtml(reference.sentence)}</p></li>`).join("")}</ol></section>` : "";
+    <li id="source-${reference.number}"><a href="${escapeHtml(reference.url)}">${escapeHtml(referenceLabel(reference.source))}</a><p>${escapeHtml(reference.sentence)}</p></li>`).join("")}</ol></section>` : "";
   p.webview.html = `<!DOCTYPE html>
 <html>
   <head>

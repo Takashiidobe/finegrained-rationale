@@ -13,7 +13,12 @@ def main() -> None:
         runpy.run_path(str(script), run_name="__main__")
     except Exception as error:
         traceback.print_exc()
-        print("ARGUS_ERROR " + json.dumps({"type": type(error).__name__, "message": str(error)}), file=sys.stderr, flush=True)
+        print(
+            "ARGUS_ERROR "
+            + json.dumps({"type": type(error).__name__, "message": str(error)}),
+            file=sys.stderr,
+            flush=True,
+        )
         sys.exit(1)
 
 

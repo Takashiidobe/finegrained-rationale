@@ -7,7 +7,9 @@ from rationale_sources import citation_instructions, resolve_component_citations
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Synthesize rationale for selected code from its top contributing commits.")
+    parser = argparse.ArgumentParser(
+        description="Synthesize rationale for selected code from its top contributing commits."
+    )
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model", required=True)
@@ -31,6 +33,7 @@ def main() -> None:
             f"NEED: {components.get('NEED', '')}\n"
             f"ALTERNATIVES: {components.get('ALTERNATIVES', '')}"
         )
+    # Prompt for synthesizing a body of code
     prompt = f"""Explain the rationale for a selected piece of code by synthesizing the evidence below.
 Describe how the commits contribute to the selected code as one coherent explanation. Ground claims in the supplied summaries and code; do not invent motives or fill gaps with speculation. If evidence is incomplete or the summaries disagree, say so. Keep the three requested components distinct.
 
@@ -51,15 +54,28 @@ NEED: ...
 ALTERNATIVES: ..."""
     sources = list(references.values())
     if sources:
-        prompt += "\n\nOriginal evidence:\n" + "\n".join(
-            f"Id: {ref['id']}\nSource: {ref['source']}\nSentence: {ref['sentence']}" for ref in sources
-        ) + citation_instructions(sources)
+        prompt += (
+            "\n\nOriginal evidence:\n"
+            + "\n".join(
+                f"Id: {ref['id']}\nSource: {ref['source']}\nSentence: {ref['sentence']}"
+                for ref in sources
+            )
+            + citation_instructions(sources)
+        )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    (output_path.parent / f"{output_path.stem}.prompt.txt").write_text(prompt, encoding="utf-8")
+    (output_path.parent / f"{output_path.stem}.prompt.txt").write_text(
+        prompt, encoding="utf-8"
+    )
     response = generate_text(prompt, args.model)
     components = resolve_component_citations(parse_components(response), sources)
-    output_path.write_text(json.dumps({"raw_response": response, "components": components, "references": sources}, indent=2), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(
+            {"raw_response": response, "components": components, "references": sources},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def parse_components(text: str) -> dict[str, str]:
@@ -68,7 +84,9 @@ def parse_components(text: str) -> dict[str, str]:
     current: str | None = None
     for raw_line in text.splitlines():
         line = raw_line.strip()
-        matched = next((label for label in labels if line.startswith(f"{label}:")), None)
+        matched = next(
+            (label for label in labels if line.startswith(f"{label}:")), None
+        )
         if matched:
             current = matched
             components.setdefault(current, []).append(line.split(":", 1)[1].strip())

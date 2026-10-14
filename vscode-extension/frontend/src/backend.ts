@@ -255,17 +255,29 @@ export class BackendClient implements vscode.Disposable {
     const repoRoot = (await this.capture("git", ["-C", path.dirname(filePath), "rev-parse", "--show-toplevel"])).trim();
     const relativeFile = path.relative(repoRoot, filePath);
     if (relativeFile.startsWith("..") || path.isAbsolute(relativeFile)) throw new Error("The selected file is outside its Git repository.");
-    const blame = await this.capture("git", ["-C", repoRoot, "blame", "--line-porcelain", "-L", `${selection.startLine},${selection.endLine}`, "--", relativeFile]);
+    const uncommittedMessage = "The code selection is not fully committed. Rationale only works for committed code.";
+    let blame: string;
+    try {
+      blame = await this.capture("git", ["-C", repoRoot, "blame", "--line-porcelain", "-L", `${selection.startLine},${selection.endLine}`, "--", relativeFile]);
+    } catch (error) {
+      if (/no such path .* in HEAD|no such ref: HEAD|bad revision ['"]?HEAD/i.test((error as Error).message)) {
+        throw new Error(uncommittedMessage);
+      }
+      throw error;
+    }
     const counts = new Map<string, number>();
     const order = new Map<string, number>();
     for (const line of blame.split(/\r?\n/)) {
       const match = line.match(/^([a-f0-9]{40}) \d+ \d+(?: \d+)?$/i);
       if (!match) continue;
       const sha = match[1];
+      if (/^0{40}$/.test(sha)) throw new Error(uncommittedMessage);
       counts.set(sha, (counts.get(sha) || 0) + 1);
       if (!order.has(sha)) order.set(sha, order.size);
     }
-    const commits = [...counts.entries()].sort((a, b) => b[1] - a[1] || (order.get(a[0])! - order.get(b[0])!)).slice(0, 3);
+    const configuredMaxCommits = vscode.workspace.getConfiguration("rationale", vscode.Uri.file(filePath)).get<number>("maxCommits", 3);
+    const maxCommits = Number.isFinite(configuredMaxCommits) ? Math.max(1, Math.floor(configuredMaxCommits)) : 3;
+    const commits = [...counts.entries()].sort((a, b) => b[1] - a[1] || (order.get(a[0])! - order.get(b[0])!)).slice(0, maxCommits);
     if (!commits.length) throw new Error("Git did not find commit history for the selected lines.");
     const remote = (await this.capture("git", ["-C", repoRoot, "config", "--get", "remote.origin.url"])).trim();
     const github = parseGitHubRemote(remote);

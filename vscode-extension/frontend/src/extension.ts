@@ -4,6 +4,7 @@ import { CliUpdateRequiredError, offerCliUpdate } from "./cli";
 import { getGitHubCommitUrl, isCommitHash } from "./commitInput";
 import { getLlmConfiguration, openConfigurationPage } from "./configuration";
 import { showExplanation } from "./panel";
+import { isRationaleFile, parseSavedRationale } from "./savedRationale";
 
 const GITHUB_SECRET = "githubToken";
 
@@ -13,6 +14,16 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(backend, output);
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("rationale.openVisualizer", async (uri?: vscode.Uri) => {
+      try {
+        const target = uri || vscode.window.activeTextEditor?.document.uri;
+        if (!target || !isRationaleFile(target.fsPath)) throw new Error("Open a rationale Markdown file to view it in the visualizer.");
+        const document = await vscode.workspace.openTextDocument(target);
+        showExplanation(parseSavedRationale(document.getText(), target.fsPath));
+      } catch (error) {
+        void reportFailure(error, output);
+      }
+    }),
     vscode.commands.registerCommand("rationale.configure", () => openConfigurationPage(context, backend)),
     vscode.commands.registerCommand("rationale.explainCommit", () => explainCommit(context, backend, output)),
     vscode.commands.registerCommand("rationale.explainSelection", () => explainSelection(context, backend, output)),
@@ -61,7 +72,7 @@ async function explainSelection(context: vscode.ExtensionContext, backend: Backe
     return;
   }
   if (editor.document.isDirty) {
-    void vscode.window.showWarningMessage("Save the selected file before explaining it so Git history matches the code.");
+    void vscode.window.showWarningMessage("The code selection is not fully committed. Rationale only works for committed code.");
     return;
   }
   const selection = editor.selection;

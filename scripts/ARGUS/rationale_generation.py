@@ -6,7 +6,7 @@ from typing import Any
 
 
 from csv_utils import read_csv_rows
-from rationale_sources import build_references, citation_id, citation_instructions, resolve_component_citations
+from rationale_sources import build_references, citation_aliases, citation_id, citation_instructions, render_prompt, resolve_component_citations
 from llm_provider import generate_text
 from artifact_retrieval import DEFAULT_OUTPUT_ROOT, get_commit_output_dir, resolve_commit_coordinates
 from rationale_sentence_identifier import ensure_artifacts_file, identify_rationale_sentences
@@ -41,8 +41,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--prompt-strategy",
-        default="CG-FS",
-        help="Prompt strategy name from data/CGPromptTemplate.csv.",
+        default="commit",
+        help="Use commit for the application prompt, or a research strategy from data/CGPromptTemplate.csv.",
     )
     return parser.parse_args()
 
@@ -128,10 +128,12 @@ def generate_rationale_summary(
     prompt = build_generation_prompt(artifacts, identified_rows, prompt_strategy)
     (output_dir / "rationale_generation_prompt.txt").write_text(prompt, encoding="utf-8")
 
-    response_text = request_openai_response(prompt, model_name)
+    references = build_references(identified_rows)
+    response_text = request_openai_response(prompt, model_name) if references else "\n".join(
+        f"{label}: No evidence found." for label in ("GOAL", "NEED", "ALTERNATIVES")
+    )
     (output_dir / "rationale_summary.txt").write_text(response_text, encoding="utf-8")
 
-    references = build_references(identified_rows)
     parsed_components = resolve_component_citations(parse_rationale_response(response_text), references)
     payload = {
         "commit_id": artifacts["commit_id"],
@@ -141,6 +143,7 @@ def generate_rationale_summary(
         "raw_response": response_text,
         "components": parsed_components,
         "references": references,
+        "citation_aliases": {alias: reference_id for reference_id, alias in citation_aliases(references).items()},
     }
 
     output_path = output_dir / "rationale_summary.json"
@@ -154,6 +157,19 @@ def build_generation_prompt(
     identified_rows: list[dict[str, Any]],
     prompt_strategy: str,
 ) -> str:
+    if prompt_strategy == "commit":
+        code_diff_information = "\n\n".join(
+            f"File: {file_info.get('filename', '')}\nDiff:\n{file_info.get('patch') or '<patch unavailable>'}"
+            for file_info in artifacts["commit_info"].get("files", [])
+        )
+        sentences_information = format_identified_sentences_for_prompt(
+            "Id: <index>\nSource: <source>\nSentence: <sentence>\nLabels: <labels>", identified_rows,
+        )
+        return render_prompt(
+            "commit-rationale.md", project_name=f"{artifacts['owner']}/{artifacts['repo']}",
+            code_diff_information=code_diff_information, sentences_information=sentences_information,
+            citation_instructions=citation_instructions(build_references(identified_rows)),
+        )
     template_row = next(
         (row for row in read_csv_rows(CG_TEMPLATE_PATH) if row["prompt_strategy"] == prompt_strategy),
         None,
@@ -186,8 +202,11 @@ def build_generation_prompt(
 
 
 def format_identified_sentences_for_prompt(template: str, rows: list[dict[str, Any]]) -> str:
+    aliases = citation_aliases(build_references(rows))
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
+        if citation_id(row) not in aliases:
+            continue
         grouped[f"{row['source']}::{row['source_id']}::{row['text_id']}"].append(row)
 
     buckets = {
@@ -205,7 +224,7 @@ def format_identified_sentences_for_prompt(template: str, rows: list[dict[str, A
         formatted_rows = []
         for row in group:
             formatted_rows.append(
-                template.replace("<index>", citation_id(row))
+                template.replace("<index>", aliases[citation_id(row)])
                 .replace("<source>", str(row["source"]))
                 .replace("<sentence>", str(row["sentence"]))
                 .replace("<labels>", str(row["final_labels"]))

@@ -1,0 +1,536 @@
+Generate an evidence-backed commit rationale for go-gitea/gitea.
+
+Review all supplied annotated sentences before writing. Evidence may be in the
+commit message, PR description, issue discussion, or inline review replies.
+Treat the diff as context only. It cannot establish the developer's rationale.
+
+First, privately build an evidence inventory for each component:
+- GOAL: objectives explicitly stated by developers.
+- NEED: problems or benefits explicitly motivating the change.
+- ALTERNATIVES: concrete approaches developers proposed, tried, compared, or
+  rejected. Include implementation alternatives discussed during review, not only
+  high-level designs. An approach that was tried and then replaced still counts.
+  Look for proposals, author responses, and follow-up decisions in the same thread.
+
+For ALTERNATIVES, check specifically for standard-library replacements, different
+algorithms, changing a data layout versus removing an annotation, keeping a
+previous approach, and suggestions later withdrawn. These are search questions,
+not evidence: report an alternative only when a supplied sentence states it and
+is labeled ALTERNATIVES. Cite the proposal, attempt, and rejection separately when
+available. Describe why an approach was rejected only if the source states why.
+Do not mistake a chronological implementation change for proof of a tradeoff.
+
+Write a concise paragraph for each component. Every sentence must be immediately
+followed by valid citations to explicitly supporting evidence for that component.
+Copy citation IDs character for character, including the full commit SHA. Never
+shorten or normalize them. Put markers directly after sentence punctuation with
+no intervening whitespace, e.g. "Supported claim.[^exact-source-id]". Separate
+sentences with a space after the last citation marker.
+Do not let one cited sentence lend apparent support to an uncited neighboring
+sentence. Do not invent technical motivations or alternatives from the diff.
+Before returning "No evidence found.", check the entire supplied evidence for
+that component. If it truly has no supported claims, return that exact phrase.
+
+## Commit diff (context only)
+File: models/renderhelper/repo_file_test.go
+Diff:
+@@ -9,6 +9,7 @@ import (
+ 	repo_model "gitea.dev/models/repo"
+ 	"gitea.dev/models/unittest"
+ 	"gitea.dev/modules/markup/markdown"
++	"gitea.dev/modules/test"
+ 
+ 	_ "gitea.dev/modules/markup/orgmode"
+ 
+@@ -80,6 +81,23 @@ func TestRepoFile(t *testing.T) {
+ <video src="/user2/repo1/media/commit/1234/my%20dir/LINK">
+ </video>`, rendered)
+ 	})
++
++	t.Run("PictureSource", func(t *testing.T) {
++		rctx := NewRenderContextRepoFile(t.Context(), repo1, RepoFileOptions{CurrentRefSubURL: "branch/main"}).
++			WithMarkupType(markdown.MarkupName)
++		rendered, err := testRenderString(rctx, `<picture><source media="(prefers-color-scheme: dark)" srcset="dark.svg"><img src="light.svg"></picture>`)
++		assert.NoError(t, err)
++		assert.Equal(t, test.NormalizeHTMLSpaces(`
++<p>
++	<a href="/user2/repo1/src/branch/main/light.svg" target="_blank" rel="nofollow noopener">
++		<picture>
++			<source media="(prefers-color-scheme: dark)" srcset="/user2/repo1/media/branch/main/dark.svg"/>
++			<img src="/user2/repo1/media/branch/main/light.svg"/>
++		</picture>
++	</a>
++</p>
++`), test.NormalizeHTMLSpaces(rendered))
++	})
+ }
+ 
+ func TestRepoFileOrgMode(t *testing.T) {
+
+File: modules/htmlutil/html_srcset.go
+Diff:
+@@ -0,0 +1,105 @@
++// Copyright 2026 The Gitea Authors. All rights reserved.
++// SPDX-License-Identifier: MIT
++
++package htmlutil
++
++import (
++	"strings"
++)
++
++type SrcSetCandidate struct {
++	SrcLink string
++	SrcDesc []string
++}
++
++const (
++	asciiSpaces         = " \t\n\r\f"
++	asciiSpacesAndComma = " \t\n\r\f,"
++)
++
++func ParseSrcset(srcset string) (candidates []SrcSetCandidate) {
++	// ref: https://html.spec.whatwg.org/multipage/images.html#parse-a-srcset-attribute
++	// It can't simply use "split" because comma can appear in URLs and descriptors can be parenthesized and contain commas.
++	extractLink := func() (string, bool) {
++		srcset = strings.TrimLeft(srcset, asciiSpacesAndComma)
++		if srcset == "" {
++			return "", false
++		}
++		end := strings.IndexAny(srcset, asciiSpaces)
++		if end == -1 {
++			end = len(srcset)
++		}
++		link := srcset[:end]
++		srcset = srcset[end:]
++		if strings.HasSuffix(link, ",") {
++			return strings.TrimRight(link, ","), false
++		}
++		return link, true
++	}
++	extractDesc := func() (string, bool) {
++		srcset = strings.TrimLeft(srcset, asciiSpaces)
++		if srcset == "" {
++			return "", false
++		}
++		inParentheses := false
++		for i := range len(srcset) {
++			c := srcset[i]
++			if inParentheses {
++				inParentheses = c != ')'
++				continue
++			}
++			if c == '(' {
++				inParentheses = true
++				continue
++			}
++			if strings.IndexByte(asciiSpacesAndComma, c) != -1 {
++				desc := srcset[:i]
++				srcset = srcset[i+1:]
++				return desc, c != ','
++			}
++		}
++		desc := srcset
++		srcset = ""
++		return desc, false
++	}
++
++	for {
++		link, hasDesc := extractLink()
++		if link == "" {
++			break
++		}
++		var descriptors []string
++		if hasDesc {
++			for {
++				desc, hasMoreDesc := extractDesc()
++				if desc != "" {
++					descriptors = append(descriptors, desc)
++				}
++				if !hasMoreDesc {
++					break
++				}
++			}
++		}
++		candidates = append(candidates, SrcSetCandidate{SrcLink: link, SrcDesc: descriptors})
++	}
++	return candidates
++}
++
++func EncodeSrcset(candidates []SrcSetCandidate) string {
++	var sb strings.Builder
++	for i, c := range candidates {
++		if i != 0 {
++			sb.WriteString(", ")
++		}
++		link := c.SrcLink
++		if prefix, ok := strings.CutSuffix(link, ","); ok {
++			link = prefix + "%2C"
++		}
++		sb.WriteString(link)
++		for _, d := range c.SrcDesc {
++			sb.WriteByte(' ')
++			sb.WriteString(d)
++		}
++	}
++	return sb.String()
++}
+
+File: modules/htmlutil/html_srcset_test.go
+Diff:
+@@ -0,0 +1,81 @@
++// Copyright 2026 The Gitea Authors. All rights reserved.
++// SPDX-License-Identifier: MIT
++
++package htmlutil
++
++import (
++	"testing"
++
++	"gitea.dev/modules/util"
++
++	"github.com/stretchr/testify/assert"
++)
++
++func TestSrcset(t *testing.T) {
++	for _, test := range []struct {
++		name       string
++		input      string
++		candidates []SrcSetCandidate
++		encoded    string
++	}{
++		{
++			name:       "bare URL",
++			input:      "image.png",
++			candidates: []SrcSetCandidate{{SrcLink: "image.png"}},
++		},
++		{
++			name:       "bare URLs",
++			input:      "a.png, b.png , c.png,",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png"}, {SrcLink: "b.png"}, {SrcLink: "c.png"}},
++			encoded:    "a.png, b.png, c.png",
++		},
++		{
++			name:       "empty candidates",
++			input:      ", ,\ta.png 1x,, ,b.png 2x, ,",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png", SrcDesc: []string{"1x"}}, {SrcLink: "b.png", SrcDesc: []string{"2x"}}},
++			encoded:    "a.png 1x, b.png 2x",
++		},
++		{
++			name:       "trailing commas in URL",
++			input:      "a.png,, b.png 2x",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png"}, {SrcLink: "b.png", SrcDesc: []string{"2x"}}},
++			encoded:    "a.png, b.png 2x",
++		},
++		{
++			name:       "comma in URL",
++			input:      "comma,in,url.png",
++			candidates: []SrcSetCandidate{{SrcLink: "comma,in,url.png"}},
++		},
++		{
++			name:       "embedded data URL",
++			input:      "data:image/png;base64,abcd 1x, image.png 2x",
++			candidates: []SrcSetCandidate{{SrcLink: "data:image/png;base64,abcd", SrcDesc: []string{"1x"}}, {SrcLink: "image.png", SrcDesc: []string{"2x"}}},
++		},
++		{
++			name:       "parenthesized descriptor",
++			input:      "a.png (x,y) 1x, b.png 2x",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png", SrcDesc: []string{"(x,y)", "1x"}}, {SrcLink: "b.png", SrcDesc: []string{"2x"}}},
++		},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			candidates := ParseSrcset(test.input)
++			assert.Equal(t, test.candidates, candidates)
++			encoded := EncodeSrcset(candidates)
++			assert.Equal(t, util.IfZero(test.encoded, test.input), encoded)
++		})
++	}
++
++	t.Run("encode trailing commas", func(t *testing.T) {
++		encoded := EncodeSrcset([]SrcSetCandidate{
++			{SrcLink: "image,"},
++			{SrcLink: "image,,", SrcDesc: []string{"2x"}},
++			{SrcLink: "image.svg?variant=light,", SrcDesc: []string{"3x"}},
++		})
++		assert.Equal(t, "image%2C, image,%2C 2x, image.svg?variant=light%2C 3x", encoded)
++		assert.Equal(t, []SrcSetCandidate{
++			{SrcLink: "image%2C"},
++			{SrcLink: "image,%2C", SrcDesc: []string{"2x"}},
++			{SrcLink: "image.svg?variant=light%2C", SrcDesc: []string{"3x"}},
++		}, ParseSrcset(encoded))
++	})
++}
+
+File: modules/markup/camo.go
+Diff:
+@@ -36,7 +36,7 @@ func b64encode(data []byte) string {
+ func camoHandleLink(link string) string {
+ 	if setting.Camo.Enabled {
+ 		lnkURL, err := url.Parse(link)
+-		if err == nil && lnkURL.IsAbs() && !strings.HasPrefix(link, setting.AppURL) &&
++		if err == nil && (lnkURL.Scheme == "http" || lnkURL.Scheme == "https") && !strings.HasPrefix(link, setting.AppURL) &&
+ 			(setting.Camo.Always || lnkURL.Scheme != "https") {
+ 			return CamoEncode(link)
+ 		}
+
+File: modules/markup/camo_test.go
+Diff:
+@@ -15,8 +15,11 @@ func TestCamoHandleLink(t *testing.T) {
+ 	setting.AppURL = "https://gitea.com"
+ 	// Test media proxy
+ 	setting.Camo.Enabled = true
++	setting.Camo.Always = false
+ 	setting.Camo.ServerURL = "https://image.proxy"
+ 	setting.Camo.HMACKey = "geheim"
++	dataURL := "data:image/png;base64,i//V"
++	assert.Equal(t, dataURL, camoHandleLink(dataURL))
+ 
+ 	assert.Equal(t,
+ 		"https://gitea.com/img.jpg",
+@@ -29,6 +32,7 @@ func TestCamoHandleLink(t *testing.T) {
+ 		camoHandleLink("http://testimages.org/img.jpg"))
+ 
+ 	setting.Camo.Always = true
++	assert.Equal(t, dataURL, camoHandleLink(dataURL))
+ 	assert.Equal(t,
+ 		"https://gitea.com/img.jpg",
+ 		camoHandleLink("https://gitea.com/img.jpg"))
+
+File: modules/markup/html.go
+Diff:
+@@ -355,6 +355,8 @@ func visitNode(ctx *RenderContext, procs []processor, node *html.Node) *html.Nod
+ 		return visitNodeImg(ctx, node)
+ 	} else if node.Data == "video" {
+ 		return visitNodeVideo(ctx, node)
++	} else if node.Data == "source" {
++		return visitNodePictureSource(ctx, node)
+ 	}
+ 
+ 	if node.Data == "a" {
+@@ -363,10 +365,11 @@ func visitNode(ctx *RenderContext, procs []processor, node *html.Node) *html.Nod
+ 		// because the content there is not processable, for example: the content is a commit id or a full URL.
+ 		procs = emojiProcessors
+ 	}
++	next := node.NextSibling
+ 	for n := node.FirstChild; n != nil; {
+ 		n = visitNode(ctx, procs, n)
+ 	}
+-	return node.NextSibling
++	return next
+ }
+ 
+ // createKeyword() renders a highlighted version of an action keyword
+
+File: modules/markup/html_node.go
+Diff:
+@@ -6,6 +6,7 @@ package markup
+ import (
+ 	"strings"
+ 
++	"gitea.dev/modules/htmlutil"
+ 	"gitea.dev/modules/markup/common"
+ 
+ 	"golang.org/x/net/html"
+@@ -127,6 +128,10 @@ func processNodeA(ctx *RenderContext, node *html.Node) {
+ 	}
+ }
+ 
++func resolveMediaLinkWithCamo(ctx *RenderContext, link string) string {
++	return camoHandleLink(ctx.RenderHelper.ResolveLink(link, LinkTypeMedia))
++}
++
+ func visitNodeImg(ctx *RenderContext, img *html.Node) (next *html.Node) {
+ 	next = img.NextSibling
+ 	attrSrc, hasLazy := "", false
+@@ -152,19 +157,21 @@ func visitNodeImg(ctx *RenderContext, img *html.Node) (next *html.Node) {
+ 			cnt++
+ 		}
+ 		if isLinkable {
++			linkNode := img
++			if img.Parent.Data == "picture" {
++				linkNode = img.Parent
++			}
+ 			wrapper := &html.Node{Type: html.ElementNode, Data: "a", Attr: []html.Attribute{
+ 				{Key: "href", Val: ctx.RenderHelper.ResolveLink(imgSrcOrigin, LinkTypeDefault)},
+ 				{Key: "target", Val: "_blank"},
+ 			}}
+-			parent := img.Parent
+-			imgNext := img.NextSibling
+-			parent.RemoveChild(img)
+-			parent.InsertBefore(wrapper, imgNext)
+-			wrapper.AppendChild(img)
++			parent := linkNode.Parent
++			linkNext := linkNode.NextSibling
++			parent.RemoveChild(linkNode)
++			parent.InsertBefore(wrapper, linkNext)
++			wrapper.AppendChild(linkNode)
+ 		}
+-
+-		imgAttr.Val = ctx.RenderHelper.ResolveLink(imgSrcOrigin, LinkTypeMedia)
+-		imgAttr.Val = camoHandleLink(imgAttr.Val)
++		imgAttr.Val = resolveMediaLinkWithCamo(ctx, imgSrcOrigin)
+ 		img.Attr[i] = imgAttr
+ 	}
+ 	if !RenderBehaviorForTesting.DisableAdditionalAttributes && !hasLazy && !strings.HasPrefix(attrSrc, "data:") {
+@@ -179,9 +186,24 @@ func visitNodeVideo(ctx *RenderContext, node *html.Node) (next *html.Node) {
+ 		if attr.Key != "src" {
+ 			continue
+ 		}
+-		attr.Val = ctx.RenderHelper.ResolveLink(attr.Val, LinkTypeMedia)
+-		attr.Val = camoHandleLink(attr.Val)
++		attr.Val = resolveMediaLinkWithCamo(ctx, attr.Val)
+ 		node.Attr[i] = attr
+ 	}
+ 	return next
+ }
++
++func visitNodePictureSource(ctx *RenderContext, node *html.Node) (next *html.Node) {
++	next = node.NextSibling
++	for attrIdx, attr := range node.Attr {
++		if attr.Key != "srcset" {
++			continue
++		}
++		srcsetCandidates := htmlutil.ParseSrcset(attr.Val)
++		for i, candidate := range srcsetCandidates {
++			srcsetCandidates[i].SrcLink = resolveMediaLinkWithCamo(ctx, candidate.SrcLink)
++		}
++		attr.Val = htmlutil.EncodeSrcset(srcsetCandidates)
++		node.Attr[attrIdx] = attr
++	}
++	return next
++}
+
+File: modules/markup/render_link.go
+Diff:
+@@ -42,7 +42,7 @@ func resolveLinkRelative(ctx context.Context, base, cur, link string, absolute b
+ 			finalLink += "?" + linkURL.RawQuery
+ 		}
+ 		if linkURL.Fragment != "" {
+-			finalLink += "#" + linkURL.Fragment
++			finalLink += "#" + linkURL.EscapedFragment()
+ 		}
+ 	}
+ 
+
+File: modules/markup/render_link_test.go
+Diff:
+@@ -20,7 +20,7 @@ func TestResolveLinkRelative(t *testing.T) {
+ 	assert.Equal(t, "/a/c", resolveLinkRelative(ctx, "/a", "b", "/c", false))
+ 	assert.Equal(t, "/a/c#id", resolveLinkRelative(ctx, "/a", "b", "/c#id", false))
+ 	assert.Equal(t, "/a/%2f?k=/", resolveLinkRelative(ctx, "/a", "b", "/%2f/?k=/", false))
+-	assert.Equal(t, "/a/b/c?k=v#id", resolveLinkRelative(ctx, "/a", "b", "c/?k=v#id", false))
++	assert.Equal(t, "/a/b/c?k=v#with%20space", resolveLinkRelative(ctx, "/a", "b", "c/?k=v#with%20space", false))
+ 	assert.Equal(t, "%invalid", resolveLinkRelative(ctx, "/a", "b", "%invalid", false))
+ 	assert.Equal(t, "http://localhost:3000/a", resolveLinkRelative(ctx, "/a", "", "", true))
+ 
+
+## Annotated artifact sentences (evidence)
+
+
+The following sentences come from the commit message
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_1_1_0
+Source: COMMIT_MESSAGE
+Sentence: fix(markup): resolve and proxy srcset links of <source> elements (#39708)
+Labels: GOAL
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_1_1_1
+Source: COMMIT_MESSAGE
+Sentence: 1. use correct links for srcset attribute of picture source
+Labels: GOAL
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_1_1_2
+Source: COMMIT_MESSAGE
+Sentence: 2. wrap the picture element with a link correctly
+Labels: GOAL
+
+The following sentences come from the pull_request: https://github.com/go-gitea/gitea/pull/39708, associated with the commit
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_1_0
+Source: PULL_REQUEST
+Sentence: fix(markup): resolve and proxy srcset links of <source> elements
+Labels: GOAL
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_0
+Source: PULL_REQUEST
+Sentence: Gitea's sanitizer allows `media` and `srcset` on `<source>` so the `<picture>` form for dark/light images renders, but the post-processor only visits `img` and `video` nodes, so a `<source>` never reaches the rewriting that `src` gets.
+Labels: NEED
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_1
+Source: PULL_REQUEST
+Sentence: A relative `srcset="dark.svg"` is then resolved by the browser against the page URL and lands on the HTML file view instead of the media route, so the dark variant never loads.
+Labels: NEED
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_2
+Source: PULL_REQUEST
+Sentence: With `[camo]` on it matters more: the `<img>` fallback is rewritten to the proxy while the `<source>` candidate is not, and in a `<picture>` the source wins, so a comment holding `<picture><source srcset="http://attacker.example/pixel.png"><img src="..."></picture>` has every reader's browser hit the attacker's host directly and hand over its address and user agent.
+Labels: NEED
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_3
+Source: PULL_REQUEST
+Sentence: I ran into it wondering why a README's dark image pointed at a `src/branch/...` URL.
+Labels: NEED
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_4
+Source: PULL_REQUEST
+Sentence: The new `source` visitor sends each `srcset` candidate through the same link resolution and camo handling as `img` and `video`, keeping separators and descriptors so a multi-candidate list survives.
+Labels: GOAL
+
+The following sentences come from the code_review_comment: https://github.com/go-gitea/gitea/pull/39708, associated with the commit
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_1_0
+Source: CODE_REVIEW_COMMENT
+Sentence: Do not re-invent the wheels.
+Labels: ALTERNATIVES
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_1_1
+Source: CODE_REVIEW_COMMENT
+Sentence: `strings.Fields` or `strings.FieldsSeq`
+Labels: ALTERNATIVES
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_3_1
+Source: CODE_REVIEW_COMMENT
+Sentence: Reworked it around strings.FieldsSeq: each field is either a candidate URL or a descriptor, tracked with one flag, and commas at a field's edges still separate candidates so a URL with an embedded comma survives.
+Labels: ALTERNATIVES
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_3_2
+Source: CODE_REVIEW_COMMENT
+Sentence: The output now normalizes whitespace to single spaces, which seemed fine for rendered HTML.
+Labels: GOAL
+
+Id: a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_6_0
+Source: CODE_REVIEW_COMMENT
+Sentence: OK, the parser is more complicated than it looks, so we still need to handle many details, `strings.Fields` can't help.
+Labels: ALTERNATIVES
+
+Add Markdown footnote markers [^source-id] immediately after every sentence.
+Replace source-id with its exact ID from the evidence. Cite only IDs listed below,
+and only in components matching their labels. Use multiple markers when combining
+evidence. Do not invent IDs or write footnote definitions.
+
+Every claim must be explicitly supported by a cited artifact sentence. Code diffs
+and selected code are context only, never evidence of rationale. If a component
+has no supported claims, return exactly "No evidence found." If there are no
+allowed source IDs, return "No evidence found." for all three components.
+
+Allowed source IDs and component labels:
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_1_1_0 (GOAL)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_1_1_1 (GOAL)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_1_1_2 (GOAL)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_1_0 (GOAL)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_0 (NEED)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_1 (NEED)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_2 (NEED)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_3 (NEED)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_6_2_4 (GOAL)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_1_0 (ALTERNATIVES)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_1_1 (ALTERNATIVES)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_3_1 (ALTERNATIVES)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_3_2 (GOAL)
+a1cc65126711814fa23b819e7972bd02631715c4-41105169_7_6_0 (ALTERNATIVES)
+
+
+Return only these labels and their paragraphs; do not output the private inventory:
+GOAL: ...
+NEED: ...
+ALTERNATIVES: ...

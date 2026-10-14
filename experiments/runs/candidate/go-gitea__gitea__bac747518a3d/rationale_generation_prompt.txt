@@ -1,0 +1,284 @@
+Generate an evidence-backed commit rationale for go-gitea/gitea.
+
+Review all supplied annotated sentences before writing. Evidence may be in the
+commit message, PR description, issue discussion, or inline review replies.
+Treat the diff as context only. It cannot establish the developer's rationale.
+
+First, privately build an evidence inventory for each component:
+- GOAL: objectives explicitly stated by developers.
+- NEED: problems or benefits explicitly motivating the change.
+- ALTERNATIVES: concrete approaches developers proposed, tried, compared, or
+  rejected. Include implementation alternatives discussed during review, not only
+  high-level designs. An approach that was tried and then replaced still counts.
+  Look for proposals, author responses, and follow-up decisions in the same thread.
+
+For ALTERNATIVES, check specifically for standard-library replacements, different
+algorithms, changing a data layout versus removing an annotation, keeping a
+previous approach, and suggestions later withdrawn. These are search questions,
+not evidence: report an alternative only when a supplied sentence states it and
+is labeled ALTERNATIVES. Cite the proposal, attempt, and rejection separately when
+available. Describe why an approach was rejected only if the source states why.
+Do not mistake a chronological implementation change for proof of a tradeoff.
+
+Write a concise paragraph for each component. Every sentence must be immediately
+followed by valid citations to explicitly supporting evidence for that component.
+Copy citation IDs character for character, including the full commit SHA. Never
+shorten or normalize them. Put markers directly after sentence punctuation with
+no intervening whitespace, e.g. "Supported claim.[^exact-source-id]". Separate
+sentences with a space after the last citation marker.
+Do not let one cited sentence lend apparent support to an uncited neighboring
+sentence. Do not invent technical motivations or alternatives from the diff.
+Before returning "No evidence found.", check the entire supplied evidence for
+that component. If it truly has no supported claims, return that exact phrase.
+
+## Commit diff (context only)
+File: modules/lfs/client_test.go
+Diff:
+@@ -8,12 +8,16 @@ import (
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
+ )
+ 
+ func TestNewClient(t *testing.T) {
+ 	u, _ := url.Parse("file:///test")
+ 	c := newClient(u, nil)
+-	assert.IsType(t, &FilesystemClient{}, c)
++	require.IsType(t, &FilesystemClient{}, c)
++	localPath, err := c.(*FilesystemClient).objectPath("invalid") //nolint:forcetypeassert // type is expected
++	assert.Empty(t, localPath)
++	assert.ErrorIs(t, err, ErrInvalidOIDFormat)
+ 
+ 	u, _ = url.Parse("https://test.com/lfs")
+ 	c = newClient(u, nil)
+
+File: modules/lfs/filesystem_client.go
+Diff:
+@@ -18,7 +18,7 @@ type FilesystemClient struct {
+ 	lfsDir string
+ }
+ 
+-// BatchSize returns the preferred size of batchs to process
++// BatchSize returns the preferred size of batches to process
+ func (c *FilesystemClient) BatchSize() int {
+ 	return 1
+ }
+@@ -29,17 +29,23 @@ func newFilesystemClient(endpoint *url.URL) *FilesystemClient {
+ 	return &FilesystemClient{lfsDir}
+ }
+ 
+-func (c *FilesystemClient) objectPath(oid string) string {
+-	return filepath.Join(c.lfsDir, oid[0:2], oid[2:4], oid)
++func (c *FilesystemClient) objectPath(oid string) (string, error) {
++	if !isValidOid(oid) {
++		return "", ErrInvalidOIDFormat
++	}
++	// HINT: LFS-INTERNAL-PATH-PATTERN
++	return filepath.Join(c.lfsDir, oid[0:2], oid[2:4], oid), nil
+ }
+ 
+ // Download reads the specific LFS object from the target path
+ func (c *FilesystemClient) Download(ctx context.Context, objects []Pointer, callback DownloadCallback) error {
+ 	for _, object := range objects {
+ 		p := Pointer{object.Oid, object.Size}
+ 
+-		objectPath := c.objectPath(p.Oid)
+-
++		objectPath, err := c.objectPath(p.Oid)
++		if err != nil {
++			return err
++		}
+ 		f, err := os.Open(objectPath)
+ 		if err != nil {
+ 			return err
+@@ -57,8 +63,10 @@ func (c *FilesystemClient) Upload(ctx context.Context, objects []Pointer, callba
+ 	for _, object := range objects {
+ 		p := Pointer{object.Oid, object.Size}
+ 
+-		objectPath := c.objectPath(p.Oid)
+-
++		objectPath, err := c.objectPath(p.Oid)
++		if err != nil {
++			return err
++		}
+ 		if err := os.MkdirAll(filepath.Dir(objectPath), os.ModePerm); err != nil {
+ 			return err
+ 		}
+
+File: modules/lfs/pointer.go
+Diff:
+@@ -10,9 +10,11 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"path"
+-	"regexp"
+ 	"strconv"
+ 	"strings"
++
++	"gitea.dev/modules/setting"
++	"gitea.dev/modules/util"
+ )
+ 
+ // spec: https://github.com/git-lfs/git-lfs/blob/master/docs/spec.md
+@@ -47,8 +49,6 @@ func ReadPointer(reader io.Reader) (Pointer, error) {
+ 	return ReadPointerFromBuffer(buf)
+ }
+ 
+-var oidPattern = regexp.MustCompile(`^[a-f\d]{64}$`)
+-
+ // ReadPointerFromBuffer will return a pointer if the provided byte slice is a pointer file or an error otherwise.
+ func ReadPointerFromBuffer(buf []byte) (Pointer, error) {
+ 	var p Pointer
+@@ -65,7 +65,7 @@ func ReadPointerFromBuffer(buf []byte) (Pointer, error) {
+ 
+ 	// spec says "key/value pairs MUST be sorted alphabetically in ascending order (version is exception and must be the first)"
+ 	oid := strings.TrimPrefix(splitLines[1], MetaFileOidPrefix)
+-	if len(oid) != 64 || !oidPattern.MatchString(oid) {
++	if !isValidOid(oid) {
+ 		return p, ErrInvalidOIDFormat
+ 	}
+ 	size, err := strconv.ParseInt(strings.TrimPrefix(splitLines[2], "size "), 10, 64)
+@@ -79,13 +79,24 @@ func ReadPointerFromBuffer(buf []byte) (Pointer, error) {
+ 	return p, nil
+ }
+ 
++func isValidOid(oid string) bool {
++	if len(oid) != 64 {
++		return false
++	}
++	for i := range len(oid) {
++		c := oid[i]
++		valid := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
++		if !valid {
++			return false
++		}
++	}
++	return true
++}
++
+ // IsValid checks if the pointer has a valid structure.
+ // It doesn't check if the pointed-to-content exists.
+ func (p Pointer) IsValid() bool {
+-	if len(p.Oid) != 64 {
+-		return false
+-	}
+-	if !oidPattern.MatchString(p.Oid) {
++	if !isValidOid(p.Oid) {
+ 		return false
+ 	}
+ 	if p.Size < 0 {
+@@ -102,10 +113,13 @@ func (p Pointer) StringContent() string {
+ 
+ // RelativePath returns the relative storage path of the pointer
+ func (p Pointer) RelativePath() string {
+-	if len(p.Oid) < 5 {
+-		return p.Oid
++	if !isValidOid(p.Oid) {
++		setting.PanicInDevOrTesting("invalid LFS OID: %s", p.Oid)
++		return "invalid-lfs-oid-" + util.PathJoinRelX(p.Oid)
+ 	}
+-
++	// HINT: LFS-INTERNAL-PATH-PATTERN: this path pattern is only used by Gitea internally,
++	// It isn't the same as the path pattern used by Git LFS, which is: <oid[0:2]>/<oid[2:4]>/<oid>
++	// However, there are other parts of Gitea that rely on such path pattern.
+ 	return path.Join(p.Oid[0:2], p.Oid[2:4], p.Oid[4:])
+ }
+ 
+
+File: modules/lfs/pointer_test.go
+Diff:
+@@ -8,6 +8,9 @@ import (
+ 	"strings"
+ 	"testing"
+ 
++	"gitea.dev/modules/setting"
++	"gitea.dev/modules/test"
++
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+@@ -22,8 +25,10 @@ func TestRelativePath(t *testing.T) {
+ 	expected := path.Join("4d", "7a", "214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393")
+ 	assert.Equal(t, expected, p.RelativePath())
+ 
++	defer test.MockVariableValue(&setting.IsProd, true)()
++	defer test.MockVariableValue(&setting.IsInTesting, false)()
+ 	p2 := Pointer{Oid: "4d7a"}
+-	assert.Equal(t, "4d7a", p2.RelativePath())
++	assert.Equal(t, "invalid-lfs-oid-4d7a", p2.RelativePath())
+ }
+ 
+ func TestIsValid(t *testing.T) {
+
+File: services/doctor/storage.go
+Diff:
+@@ -119,6 +119,7 @@ func checkStorage(opts *checkStorageOptions) func(ctx context.Context, logger lo
+ 				&commonStorageCheckOptions{
+ 					storer: storage.LFS,
+ 					isOrphaned: func(path string, obj storage.Object, stat fs.FileInfo) (bool, error) {
++						// HINT: LFS-INTERNAL-PATH-PATTERN
+ 						// The oid of an LFS stored object is the name but with all the path.Separators removed
+ 						oid := strings.ReplaceAll(strings.ReplaceAll(path, "\\", ""), "/", "")
+ 						exists, err := git.ExistsLFSObject(ctx, oid)
+
+## Annotated artifact sentences (evidence)
+
+
+The following sentences come from the commit message
+
+Id: bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_1_1_0
+Source: COMMIT_MESSAGE
+Sentence: fix(lfs): validate OID before building filesystem object path (#39762)
+Labels: GOAL
+
+The following sentences come from the pull_request: https://github.com/go-gitea/gitea/pull/39762, associated with the commit
+
+Id: bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_1_0
+Source: PULL_REQUEST
+Sentence: fix(lfs): validate OID before building filesystem object path
+Labels: GOAL
+
+Id: bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_1
+Source: PULL_REQUEST
+Sentence: Its `objectPath` turns a pointer's OID straight into an on-disk path with `filepath.Join(c.lfsDir, oid[0:2], oid[2:4], oid)`, and `Download`/`Upload` then `os.Open` and `os.Create` that path directly, without the storage layer that contains every other LFS access.
+Labels: GOAL
+
+Id: bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_2
+Source: PULL_REQUEST
+Sentence: Today the OIDs always arrive from `SearchPointerBlobs` and the LFS server, which run `IsValid` first, so the safety of this function lives entirely in its callers rather than in the function itself.
+Labels: NEED
+
+Id: bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_3
+Source: PULL_REQUEST
+Sentence: That is a fragile place to depend on: an OID carrying `..` would let a read or write land outside the objects directory, and a short OID slices `oid[0:2]`/`oid[2:4]` out of range and panics.
+Labels: NEED
+
+Id: bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_5
+Source: PULL_REQUEST
+Sentence: Validating the pointer with `IsValid` at the top of `Download` and `Upload` keeps the check next to the code that builds the path, and a well-formed 64-hex OID behaves exactly as before.
+Labels: GOAL
+
+Add Markdown footnote markers [^source-id] immediately after every sentence.
+Replace source-id with its exact ID from the evidence. Cite only IDs listed below,
+and only in components matching their labels. Use multiple markers when combining
+evidence. Do not invent IDs or write footnote definitions.
+
+Every claim must be explicitly supported by a cited artifact sentence. Code diffs
+and selected code are context only, never evidence of rationale. If a component
+has no supported claims, return exactly "No evidence found." If there are no
+allowed source IDs, return "No evidence found." for all three components.
+
+Allowed source IDs and component labels:
+bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_1_1_0 (GOAL)
+bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_1_0 (GOAL)
+bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_1 (GOAL)
+bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_2 (NEED)
+bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_3 (NEED)
+bac747518a3d3e08468c30811c45f4a646d6a9de-57784381_6_2_5 (GOAL)
+
+
+Return only these labels and their paragraphs; do not output the private inventory:
+GOAL: ...
+NEED: ...
+ALTERNATIVES: ...

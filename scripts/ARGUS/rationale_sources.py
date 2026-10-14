@@ -1,4 +1,6 @@
 import re
+from pathlib import Path
+from string import Template
 from typing import Any
 from urllib.parse import urlparse
 
@@ -35,22 +37,36 @@ def build_references(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(references.values())
 
 
+def citation_aliases(references: list[dict[str, Any]]) -> dict[str, str]:
+    return {reference_id: f"s{index}" for index, reference_id in enumerate(sorted({ref["id"] for ref in references}), 1)}
+
+
+def shorten_citations(text: str, aliases: dict[str, str]) -> str:
+    return CITATION.sub(lambda match: f"[^{aliases[match[1]]}]" if match[1] in aliases else "", text)
+
+
+def render_prompt(name: str, **values: Any) -> str:
+    prompt_path = Path(__file__).resolve().parents[2] / "prompts" / name
+    return Template(prompt_path.read_text(encoding="utf-8")).substitute(values)
+
+
 def citation_instructions(references: list[dict[str, Any]]) -> str:
-    if not references:
-        return ""
-    allowed = "\n".join(f"{ref['id']} ({', '.join(ref['labels'])})" for ref in references)
-    return f"""\n\nSource citations:
-Add Markdown footnote markers [^source-id] immediately after each claim supported by an annotated sentence. Replace source-id with its exact Id from the inputs. Cite only IDs listed below, and only in components matching their labels. Use multiple markers when a claim combines evidence. Do not invent IDs or write footnote definitions; the application links the markers to the original sources. Claims based only on the code diff may remain uncited.
-Allowed source IDs and component labels:
-{allowed}"""
+    aliases = citation_aliases(references)
+    allowed = "\n".join(f"{aliases[ref['id']]} ({', '.join(ref['labels'])})" for ref in references)
+    return render_prompt("citations.md", allowed_sources=allowed)
 
 
 def resolve_component_citations(components: dict[str, str], references: list[dict[str, Any]]) -> dict[str, str]:
     by_id = {reference["id"]: reference for reference in references}
+    by_id.update({alias: by_id[reference_id] for reference_id, alias in citation_aliases(references).items()})
     result = {}
-    for label, text in components.items():
+    for label in COMPONENTS:
+        text = components.get(label, "")
         def replace(match: re.Match[str]) -> str:
             reference = by_id.get(match[1])
-            return match[0] if reference and label in reference["labels"] else ""
-        result[label] = CITATION.sub(replace, text).strip()
+            return f"[^{reference['id']}]" if reference and label in reference["labels"] else ""
+        resolved = CITATION.sub(replace, text).strip()
+        resolved = re.sub(r"[ \t]+(?=\[\^)", "", resolved)
+        claims = [claim.strip() for claim in re.findall(r"[\s\S]+?(?:[.!?](?:\[\^[^\]\r\n]+\])*(?=\s|$)|$)", resolved) if claim.strip()]
+        result[label] = resolved if claims and all(CITATION.search(claim) for claim in claims) else "No evidence found."
     return result

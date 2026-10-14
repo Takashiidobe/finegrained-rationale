@@ -1,0 +1,215 @@
+Generate an evidence-backed commit rationale for torvalds/linux.
+
+Review all supplied annotated sentences before writing. Evidence may be in the
+commit message, PR description, issue discussion, or inline review replies.
+Treat the diff as context only. It cannot establish the developer's rationale.
+
+First, privately build an evidence inventory for each component:
+- GOAL: objectives explicitly stated by developers.
+- NEED: problems or benefits explicitly motivating the change.
+- ALTERNATIVES: concrete approaches developers proposed, tried, compared, or
+  rejected. Include implementation alternatives discussed during review, not only
+  high-level designs. An approach that was tried and then replaced still counts.
+  Look for proposals, author responses, and follow-up decisions in the same thread.
+
+For ALTERNATIVES, check specifically for standard-library replacements, different
+algorithms, changing a data layout versus removing an annotation, keeping a
+previous approach, and suggestions later withdrawn. These are search questions,
+not evidence: report an alternative only when a supplied sentence states it and
+is labeled ALTERNATIVES. Cite the proposal, attempt, and rejection separately when
+available. Describe why an approach was rejected only if the source states why.
+Do not mistake a chronological implementation change for proof of a tradeoff.
+
+Write a concise paragraph for each component. Every sentence must be immediately
+followed by valid citations to explicitly supporting evidence for that component.
+Copy citation IDs character for character, including the full commit SHA. Never
+shorten or normalize them. Put markers directly after sentence punctuation with
+no intervening whitespace, e.g. "Supported claim.[^exact-source-id]". Separate
+sentences with a space after the last citation marker.
+Do not let one cited sentence lend apparent support to an uncited neighboring
+sentence. Do not invent technical motivations or alternatives from the diff.
+Before returning "No evidence found.", check the entire supplied evidence for
+that component. If it truly has no supported claims, return that exact phrase.
+
+## Commit diff (context only)
+File: drivers/regulator/ltc3676.c
+Diff:
+@@ -232,7 +232,7 @@ static const struct regulator_desc ltc3676_regulators[LTC3676_NUM_REGULATORS] =
+ 	LTC3676_FIXED_REG(LDO4, ldo4, LDOB, 2),
+ };
+ 
+-static bool ltc3676_readable_writeable_reg(struct device *dev, unsigned int reg)
++static bool ltc3676_writeable_reg(struct device *dev, unsigned int reg)
+ {
+ 	switch (reg) {
+ 	case LTC3676_BUCK1 ... LTC3676_IRQSTAT:
+@@ -243,6 +243,15 @@ static bool ltc3676_readable_writeable_reg(struct device *dev, unsigned int reg)
+ 	return false;
+ }
+ 
++static bool ltc3676_readable_reg(struct device *dev, unsigned int reg)
++{
++	switch (reg) {
++	case LTC3676_BUCK1 ... LTC3676_IRQSTAT:
++		return true;
++	}
++	return false;
++}
++
+ static bool ltc3676_volatile_reg(struct device *dev, unsigned int reg)
+ {
+ 	switch (reg) {
+@@ -255,8 +264,8 @@ static bool ltc3676_volatile_reg(struct device *dev, unsigned int reg)
+ static const struct regmap_config ltc3676_regmap_config = {
+ 	.reg_bits = 8,
+ 	.val_bits = 8,
+-	.writeable_reg = ltc3676_readable_writeable_reg,
+-	.readable_reg = ltc3676_readable_writeable_reg,
++	.writeable_reg = ltc3676_writeable_reg,
++	.readable_reg = ltc3676_readable_reg,
+ 	.volatile_reg = ltc3676_volatile_reg,
+ 	.max_register = LTC3676_CLIRQ,
+ 	.use_single_read = true,
+
+File: drivers/regulator/of_regulator.c
+Diff:
+@@ -929,21 +929,26 @@ static int is_supply_name(const char *name)
+  * before returning to the caller, and @consumers will not be
+  * changed.
+  *
++ * On success the array is allocated here and handed to the caller, which
++ * owns it from then on: release the regulators with regulator_bulk_free()
++ * and free the array itself with kfree(). The supply names live in the
++ * same allocation, so they are gone once the array is freed.
++ *
+  * Return: Number of regulators on success, or a negative error number
+  *	   on failure.
+  */
+ int of_regulator_bulk_get_all(struct device *dev, struct device_node *np,
+ 			      struct regulator_bulk_data **consumers)
+ {
+-	int num_consumers = 0;
++	int num_consumers = 0, names_len = 0;
+ 	struct regulator *tmp;
+ 	struct regulator_bulk_data *_consumers = NULL;
+ 	struct property *prop;
++	char *names;
+ 	int i, n = 0, ret;
+-	char name[64];
+ 
+ 	/*
+-	 * first pass: get numbers of xxx-supply
++	 * first pass: get numbers of xxx-supply and the room their names take
+ 	 * second pass: fill consumers
+ 	 */
+ restart:
+@@ -953,16 +958,19 @@ int of_regulator_bulk_get_all(struct device *dev, struct device_node *np,
+ 			continue;
+ 		if (!_consumers) {
+ 			num_consumers++;
++			names_len += i + 1;
+ 			continue;
+ 		} else {
+-			memcpy(name, prop->name, i);
+-			name[i] = '\0';
+-			tmp = regulator_get(dev, name);
++			memcpy(names, prop->name, i);
++			names[i] = '\0';
++			tmp = regulator_get(dev, names);
+ 			if (IS_ERR(tmp)) {
+ 				ret = PTR_ERR(tmp);
+ 				goto error;
+ 			}
++			_consumers[n].supply = names;
+ 			_consumers[n].consumer = tmp;
++			names += i + 1;
+ 			n++;
+ 			continue;
+ 		}
+@@ -973,9 +981,16 @@ int of_regulator_bulk_get_all(struct device *dev, struct device_node *np,
+ 	}
+ 	if (num_consumers == 0)
+ 		return 0;
+-	_consumers = kmalloc_objs(struct regulator_bulk_data, num_consumers);
++	/*
++	 * The supply names are kept in the same allocation as the array, so
++	 * that they share its lifetime and the caller has nothing extra to
++	 * free.
++	 */
++	_consumers = kzalloc(size_add(size_mul(num_consumers, sizeof(*_consumers)),
++				      names_len), GFP_KERNEL);
+ 	if (!_consumers)
+ 		return -ENOMEM;
++	names = (char *)(_consumers + num_consumers);
+ 	goto restart;
+ 
+ error:
+
+File: drivers/regulator/tps6594-regulator.c
+Diff:
+@@ -241,21 +241,21 @@ static const struct regulator_desc tps65224_buck_regs[] = {
+ 			  TPS65224_MASK_BUCKS_VSET,
+ 			  TPS6594_REG_BUCKX_CTRL(1),
+ 			  TPS6594_BIT_BUCK_EN, 0, 0, tps65224_bucks_2_3_4_ranges,
+-			  4, 0, 0, NULL, 0, 0),
++			  ARRAY_SIZE(tps65224_bucks_2_3_4_ranges), 0, 0, NULL, 0, 0),
+ 	TPS6594_REGULATOR("BUCK3", "buck3", TPS6594_BUCK_3,
+ 			  REGULATOR_VOLTAGE, tps6594_bucks_ops, TPS65224_MASK_BUCKS_VSET,
+ 			  TPS6594_REG_BUCKX_VOUT_1(2),
+ 			  TPS65224_MASK_BUCKS_VSET,
+ 			  TPS6594_REG_BUCKX_CTRL(2),
+ 			  TPS6594_BIT_BUCK_EN, 0, 0, tps65224_bucks_2_3_4_ranges,
+-			  4, 0, 0, NULL, 0, 0),
++			  ARRAY_SIZE(tps65224_bucks_2_3_4_ranges), 0, 0, NULL, 0, 0),
+ 	TPS6594_REGULATOR("BUCK4", "buck4", TPS6594_BUCK_4,
+ 			  REGULATOR_VOLTAGE, tps6594_bucks_ops, TPS65224_MASK_BUCKS_VSET,
+ 			  TPS6594_REG_BUCKX_VOUT_1(3),
+ 			  TPS65224_MASK_BUCKS_VSET,
+ 			  TPS6594_REG_BUCKX_CTRL(3),
+ 			  TPS6594_BIT_BUCK_EN, 0, 0, tps65224_bucks_2_3_4_ranges,
+-			  4, 0, 0, NULL, 0, 0),
++			  ARRAY_SIZE(tps65224_bucks_2_3_4_ranges), 0, 0, NULL, 0, 0),
+ };
+ 
+ static const struct tps6594_regulator_irq_type tps6594_buck1_irq_types[] = {
+
+## Annotated artifact sentences (evidence)
+
+
+The following sentences come from the commit message
+
+Id: 5906f156e8818d29839d7d7280b691f627b59883-53680513_1_1_1
+Source: COMMIT_MESSAGE
+Sentence: Pull regulator fixes from Mark Brown: "There's a couple of core fixes here: there were a couple of issues with of_regulator_bulk_get_all() not behaving consistently with the other bulk regulator APIs which caused memory leaks and error handling issues in users.
+Labels: NEED
+
+Id: 5906f156e8818d29839d7d7280b691f627b59883-53680513_1_1_2
+Source: COMMIT_MESSAGE
+Sentence: We also have a couple of fairly standard driver specific fixes"
+Labels: GOAL
+
+Id: 5906f156e8818d29839d7d7280b691f627b59883-53680513_1_1_3
+Source: COMMIT_MESSAGE
+Sentence: * tag 'regulator-fix-v7.3-rc6' of git://git.kernel.org/pub/scm/linux/kernel/git/broonie/regulator: regulator: ltc3676: don't read the write-only HRST and CLIRQ registers regulator: of: state who owns the array from of_regulator_bulk_get_all() regulator: of: fill in supply names in of_regulator_bulk_get_all() regulator: tps6594-regulator: Fix n_linear_ranges for TPS65224 BUCK2-4
+Labels: GOAL
+
+Add Markdown footnote markers [^source-id] immediately after every sentence.
+Replace source-id with its exact ID from the evidence. Cite only IDs listed below,
+and only in components matching their labels. Use multiple markers when combining
+evidence. Do not invent IDs or write footnote definitions.
+
+Every claim must be explicitly supported by a cited artifact sentence. Code diffs
+and selected code are context only, never evidence of rationale. If a component
+has no supported claims, return exactly "No evidence found." If there are no
+allowed source IDs, return "No evidence found." for all three components.
+
+Allowed source IDs and component labels:
+5906f156e8818d29839d7d7280b691f627b59883-53680513_1_1_1 (NEED)
+5906f156e8818d29839d7d7280b691f627b59883-53680513_1_1_2 (GOAL)
+5906f156e8818d29839d7d7280b691f627b59883-53680513_1_1_3 (GOAL)
+
+
+Return only these labels and their paragraphs; do not output the private inventory:
+GOAL: ...
+NEED: ...
+ALTERNATIVES: ...

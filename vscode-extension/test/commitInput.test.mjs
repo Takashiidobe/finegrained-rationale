@@ -79,7 +79,28 @@ test('commit analysis saves footnotes in the workspace Markdown and returns them
   const markdown = await readFile(result.rationaleFile, 'utf8');
   assert.equal(result.rationaleFile, path.join(folder, '.rationale', 'owner', 'repo', 'commit-abc1234.md'));
   assert.ok(markdown.includes('Keep the custom firewall.[^1]'));
-  assert.ok(markdown.includes('[^1]: [Issue](<https://github.com/owner/repo/issues/42#issuecomment-123>)'));
+  assert.ok(markdown.includes('[^1]: [Issue \\#42](<https://github.com/owner/repo/issues/42#issuecomment-123>)'));
   assert.equal(result.references[0].number, 1);
   assert.equal(result.components.NEED, 'Keep the custom firewall.[^1]');
+});
+
+test('selected code rejects uncommitted lines and files before analysis', async (t) => {
+  const folder = await mkdtemp(path.join(tmpdir(), 'rationale-selection-'));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet', folder]);
+  const backend = createBackend(folder);
+  const llm = { mode: 'api', provider: 'anthropic', model: 'test-model', apiKey: 'fake-key' };
+  const expected = { message: 'The code selection is not fully committed. Rationale only works for committed code.' };
+  const filePath = path.join(folder, 'code.txt');
+  await writeFile(filePath, 'committed\n');
+  await assert.rejects(backend.explainSelection({ filePath, startLine: 1, endLine: 1, code: 'committed' }, llm), expected);
+  execFileSync('git', ['-C', folder, 'add', 'code.txt']);
+  execFileSync('git', ['-C', folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'Initial']);
+  await writeFile(filePath, 'committed\nuncommitted\n');
+  for (const startLine of [1, 2]) {
+    await assert.rejects(backend.explainSelection({ filePath, startLine, endLine: 2, code: 'uncommitted' }, llm), expected);
+  }
+  const untrackedPath = path.join(folder, 'untracked.txt');
+  await writeFile(untrackedPath, 'untracked\n');
+  await assert.rejects(backend.explainSelection({ filePath: untrackedPath, startLine: 1, endLine: 1, code: 'untracked' }, llm), expected);
 });

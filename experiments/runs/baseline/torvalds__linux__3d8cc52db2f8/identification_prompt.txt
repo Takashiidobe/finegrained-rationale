@@ -1,0 +1,407 @@
+# Task summary
+
+You are an experienced Java programmer on the torvalds/linux project. Your task is to analyze a set of sentences, identify whether they express the rationale behind a target code commit, and annotate them according to a taxonomy of rationale components.
+
+You will be provided with:
+* A list of rationale components, each one describing a different aspect that explains why the code was changed the way it was.
+* The diff of the target commit, which shows how one or more code files were changed.
+* A list of sentences extracted from different sources (artifacts) related to the commit, namely the commit message, pull requests, issue reports, code review comments, Javadoc comments, and inline/block code comments of the changed code.
+
+# Instructions
+* Analyze the content of the sentences, identify the rationale components that they describe, and annotate them with those components.
+* Annotate the sentences individually using one or more of the provided rationale components only if the sentence contains information about those components.
+* If a sentence does not describe any of the rationale components, do not include that sentence in your response.
+* In your response, provide only the sentence ID and the component(s); do not include any additional information.
+* Provide your response in CSV format.
+
+# Important
+Each sentence ID follows the format: CommitID_SourceID_TextID_LocalSentenceID. The IDs in this format are numbers that we use to identify different artifacts and text snippets within these artifacts. If consecutive sentences share the same CommitID_SourceID_TextID, it means they are logically grouped within the artifacts' text. For labeling the sentences, consider these groups as context (as they may give more information about the sentences), but still label the sentences individually.
+
+# Inputs
+
+## Rationale Components
+1. GOAL: Describes what changes have been made by the developer in the code change. This is a high-level or low-level description of the code change, indicating what the developer aims to achieve with the code change.
+
+2. NEED: Describes the specific reason, motivation, or benefit of the code change. This indicates why the developer wants to make the code change.
+
+3. ALTERNATIVES: Describes other potential solutions considered by the developers before making the final code change. This indicates the alternative solutions discussed by the developers, but not implemented for the code change.
+
+## Diff of the Target Commit
+1. 
+File: security/landlock/domain.h
+Diff:
+"""@@ -242,9 +242,14 @@ struct landlock_domain {
+ 			 * to properly handle merged rulesets without
+ 			 * overlapping access rights.  These layers are set once
+ 			 * and never changed for the lifetime of the domain.
++			 *
++			 * Not annotated with __counted_by(num_layers): clang
++			 * miscomputes the counter address for a FAM nested in
++			 * an anonymous struct within a union, which trips
++			 * FORTIFY:
++			 * https://github.com/llvm/llvm-project/pull/228309
+ 			 */
+-			struct access_masks
+-				handled_masks[] __counted_by(num_layers);
++			struct access_masks handled_masks[];
+ 		};
+ 	};
+ };"""
+
+## Sentences to Annotate (Separated by Source)
+
+
+The following sentences come from the commit message
+
+Id: 12822264_1_1_0
+Source: COMMIT_MESSAGE
+Sentence: 
+"""landlock: Drop __counted_by from landlock_domain.handled_masks"""
+
+Id: 12822264_1_1_1
+Source: COMMIT_MESSAGE
+Sentence: 
+"""With clang 22 and CONFIG_FORTIFY_SOURCE, the second landlock_restrict_self() call hits a bogus fortify report in inherit_ruleset():"""
+
+Id: 12822264_1_1_2
+Source: COMMIT_MESSAGE
+Sentence: 
+"""memcpy: detected buffer overflow: 4 byte write of buffer size 0 Call Trace: __fortify_panic landlock_merge_ruleset __se_sys_landlock_restrict_self"""
+
+Id: 12822264_1_1_3
+Source: COMMIT_MESSAGE
+Sentence: 
+"""handled_masks[] lives in an anonymous struct inside the anonymous union that overlays work_free."""
+
+Id: 12822264_1_1_4
+Source: COMMIT_MESSAGE
+Sentence: 
+"""For such a flexible array, clang computes the address of the __counted_by counter as the start of the array instead of &num_layers."""
+
+Id: 12822264_1_1_5
+Source: COMMIT_MESSAGE
+Sentence: 
+"""The bound is then read from handled_masks[0], i.e. from the first layer's access masks, which is not a count."""
+
+Id: 12822264_1_1_6
+Source: COMMIT_MESSAGE
+Sentence: 
+"""The same layout crashes clang itself in a standalone test."""
+
+Id: 12822264_1_1_7
+Source: COMMIT_MESSAGE
+Sentence: 
+"""The annotation was added as documentation, so drop it rather than restructure the union."""
+
+Id: 12822264_1_1_8
+Source: COMMIT_MESSAGE
+Sentence: 
+"""Keep the information in the member comment."""
+
+Id: 12822264_1_1_9
+Source: COMMIT_MESSAGE
+Sentence: 
+"""Reported-by: syzbot+a0eecb22de4d821a9e5d@syzkaller.appspotmail.com Closes: https://syzkaller.appspot.com/bug?extid=a0eecb22de4d821a9e5d Fixes: bd3a19800dd1 ("landlock: Add counted_by in landlock_domain") Signed-off-by: Nguyen Ngoc Thang <ngocthang2710.1999@gmail.com> Link: https://lore.kernel.org/r/20261010164450.194439-1-ngocthang2710.1999@gmail.com Reviewed-by: Günther Noack <gnoack3000@gmail.com> Reported-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com> Reported-by: Mike Bommarito <michael.bommarito@gmail.com> Closes: https://lore.kernel.org/r/20261009115108.17819-1-michael.bommarito@gmail.com [mic: Rebased on master, where the array is handled_masks[], updated the fortify report, added the clang bug link and the other reports] Signed-off-by: Mickaël Salaün <mic@digikod.net>"""
+
+# Response Format (CSV)
+
+sentence_id, labels
+<ID1>, "<LABEL1>, ..."
+
+
+# Example for Illustration Purposes
+
+Below, I am providing 2 example commits with the code diff and extracted sentences for that commit with the expected rationale component labels. Use the examples only for learning purposes.
+
+## Diff of the Example Commit 1
+1.
+File: src/main/java/org/junit/rules/ExpectedException.java
+Diff:
+"""@@ -43,8 +43,8 @@
+* public void throwsIllegalArgumentExceptionWithMessageAndCause() {
+* NullPointerException expectedCause = new NullPointerException();
+* thrown.expect(IllegalArgumentException.class);
+- * thrown.expectMessage(&quot;happened?&quot;);
+- * thrown.expectCause(expectedCause);
++ * thrown.expectMessage(&quot;What&quot;);
++ * thrown.expectCause(is(expectedCause));
+* throw new IllegalArgumentException(&quot;What happened?&quot;, cause);
+* }
+* }
+@@ -106,8 +106,12 @@ public void expectMessage(Matcher<String> matcher) {
+expect(hasMessage(matcher));
+}
+
+- public void expectCause(Throwable expectedCause) {
+- expect(causeEquals(expectedCause));
++ /**
++ * Adds {@code matcher} to the list of requirements for the cause of
++ * any thrown exception.
++ */
++ public void expectCause(Matcher<? extends Throwable> expectedCause) {
++ expect(hasCause(expectedCause));
+}
+
+private class ExpectedExceptionStatement extends Statement {
+@@ -147,16 +151,16 @@ public boolean matchesSafely(Throwable item) {
+};
+}
+
+- private Matcher<Throwable> causeEquals(final Throwable expectedCause) {
++ private Matcher<Throwable> hasCause(final Matcher<? extends Throwable> causeMatcher) {
+return new TypeSafeMatcher<Throwable>() {
+- @Override
+- public boolean matchesSafely(Throwable item) {
+- return expectedCause == null ? item.getCause() == null : expectedCause.equals(item.getCause());
+- }
+-
+public void describeTo(Description description) {
+description.appendText("exception with cause ");
+- description.appendText(expectedCause.toString());
++ description.appendDescriptionOf(causeMatcher);
++ }
++
++ @Override
++ public boolean matchesSafely(Throwable item) {
++ return causeMatcher.matches(item.getCause());
+}
+};
+}"""
+
+2.
+File: src/test/java/org/junit/tests/experimental/rules/ExpectedExceptionRuleTest.java
+Diff:
+"""@@ -1,18 +1,21 @@
+package org.junit.tests.experimental.rules;
+
+-import static org.hamcrest.CoreMatchers.any;
+-import static org.junit.Assert.assertThat;
+-import static org.junit.experimental.results.PrintableResult.testResult;
+-import static org.junit.experimental.results.ResultMatchers.hasSingleFailureContaining;
+-import static org.junit.experimental.results.ResultMatchers.isSuccessful;
+-import static org.junit.matchers.JUnitMatchers.both;
++import org.hamcrest.CoreMatchers;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.internal.matchers.TypeSafeMatcher;
+import org.junit.rules.ExpectedException;
+
++import static org.hamcrest.CoreMatchers.any;
++import static org.hamcrest.CoreMatchers.is;
++import static org.junit.Assert.assertThat;
++import static org.junit.experimental.results.PrintableResult.testResult;
++import static org.junit.experimental.results.ResultMatchers.hasSingleFailureContaining;
++import static org.junit.experimental.results.ResultMatchers.isSuccessful;
++import static org.junit.matchers.JUnitMatchers.both;
++
+public class ExpectedExceptionRuleTest {
+public static class HasExpectedException {
+@Rule
+@@ -42,7 +45,7 @@ public void throwsIllegalArgumentExceptionWithCause() {
+
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(expectedCause);
++ thrown.expectCause(is(expectedCause));
+
+throw new IllegalArgumentException("Ack!", expectedCause);
+}
+@@ -51,7 +54,7 @@ public void throwsIllegalArgumentExceptionWithCause() {
+public void throwsIllegalArgumentExceptionWithCauseExplicitlyNull() {
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(null);
++ thrown.expectCause(CoreMatchers.<Throwable>nullValue());
+
+throw new IllegalArgumentException("Ack!");
+}
+@@ -260,7 +263,7 @@ public static class HasWrongCause {
+public void throwWithCause() {
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(EXPECTED_CAUSE);
++ thrown.expectCause(is(EXPECTED_CAUSE));
+
+throw new IllegalArgumentException("Ack!", new NullPointerException("an unexpected cause"));
+}"""
+
+## Sentences of the Example Commit 1 (Separated by Source).
+
+The sentences we have already labeled are shown with their corresponding labels. Sentences without any labels (i.e., those that do not contain rationale information) have empty labels.
+
+The following sentences come from the commit message:
+
+Id: 756_1_1_0
+Source: COMMIT_MESSAGE
+Sentence:
+"""changed the expectedCause() method to accept a Matcher instead of an explicit Throwable and made some documentation changes"""
+Label: GOAL
+
+The following sentences come from the Javadoc comments of the class(src/main/java/org/junit/rules/ExpectedException.java#ExpectedException) that were changed:
+
+Id: 756_3_5_0
+Source: CLASS_JAVADOCS
+Sentence:
+"""The ExpectedException Rule allows in-test specification of expected exception types and messages: <pre> // These tests all pass."""
+Label:
+
+Id: 756_3_2_0
+Source: CLASS_JAVADOCS
+Sentence:
+"""thrown.expectMessage(&quot;What&quot;); thrown.expectCause(is(expectedCause));"""
+Label:
+Reason: This sentence contains source code that checks the exception class's cause and messages during testing. It is unrelated to the target code change. It doesn‚Äôt describe what changes were made or why, nor does it propose alternative solutions to the current implementation. Therefore, it is not labeled as GOAL, NEED, or ALTERNATIVES.
+
+The following sentences come from the Javadoc comments of the method(src/main/java/org/junit/rules/ExpectedException.java#expectCause) that were changed
+
+Id: 756_4_28_0
+Source: METHOD_JAVADOCS
+Sentence:
+"""Adds {@code matcher} to the list of requirements for the cause of any thrown exception."""
+Label: GOAL
+
+The following sentences come from the pull_request: https://github.com/junit-team/junit4/pull/377, associated with the commit
+
+Id: 756_6_7_0
+Source: PULL_REQUEST
+Sentence:
+"""Enable ExpectedException to match causes more easily"""
+Label: NEED
+
+Id: 756_6_8_0
+Source: PULL_REQUEST
+Sentence:
+"""When working especially with third-party libraries, it's common to deal with checked exceptions in a way similar to this:
+
+``` java
+try {
+collaborator.something();
+}
+catch (CheckedException e) {
+throw new MyRuntimeException("failed to do something", e);
+}
+```
+
+It's common for different instances of MyRuntimeException to be thrown from many possible execution branches, so when testing this, I would like to do something like:
+
+``` java
+@Rule
+ExpectedException thrown= ExpectedException.none();
+
+@Test
+public void aTest() throws Exception {
+CheckedException expected = new CheckedException("expected");
+
+Mockito.when(collaborator.something()).thenThrow(expected);
+
+thrown.expect(MyRuntimeException.class);
+thrown.expectMessage("failed to do something");
+thrown.expectCause(expected);
+
+myObject.method();
+}"""
+Label: 
+
+Id: 756_6_8_4
+Source: PULL_REQUEST
+Sentence:
+"""I realise you can do that with a custom matcher as well, but it feels like this is (at least nearly) as fundamental as matching on the message, so it should perhaps be a part of the core framework?"""
+Label: ALTERNATIVES, NEED
+
+Id: 756_6_9_1
+Source: PULL_REQUEST
+Sentence:
+"""One concern I have is that many custom exceptions don't have well-defined equals() methods."""
+Label:
+
+Id: 756_6_9_2
+Source: PULL_REQUEST
+Sentence:
+"""What about one of these ideas:
+
+thrown.expectCause(instanceOf(CheckedException.class));
+
+Or, trickier:
+
+thrown.onCause().expectMessage("failed to do something"), where onCause() returns an ExpectedException itself (haven't thought about how hard this would be)."""
+Label: ALTERNATIVES
+
+Id: 756_6_10_0
+Source: PULL_REQUEST
+Sentence:
+"""Hm, in the initial implementation, I actually didn't check equals but ==."""
+Label:
+
+Id: 756_6_10_1
+Source: PULL_REQUEST
+Sentence:
+"""I can't remember why I changed it now, but using == feels a little better in some ways - I can't think of a scenario where some code would want to do for instance a clone of an exception that was thrown, and wrapping it in another cause would require the comparison to be recursive."""
+Label:
+
+Id: 756_6_11_1
+Source: PULL_REQUEST
+Sentence:
+"""I still think that having expectCause take a Matcher means more flexibility for everyone."""
+Label: NEED
+
+Id: 756_6_11_2
+Source: PULL_REQUEST
+Sentence:
+"""Developers can use thrown.expectCause(is(expected)) when they want the exact exception, and other matchers when they want something more generic."""
+Label: NEED
+
+## Diff of the Example Commit 2
+1.
+File: src/main/java/org/junit/rules/TemporaryFolder.java
+Diff:
+"""@@ -61,13 +61,19 @@ public Result invoke(Invocation invocation) throws RpcException {\n asyncResult.get(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);\n }\n } catch (InterruptedException e) {\n- throw new RpcException(\"Interrupted unexpectedly while waiting for remoting result to return! method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(\"Interrupted unexpectedly while waiting for remote result to return! method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n } catch (ExecutionException e) {\n Throwable t = e.getCause();\n if (t instanceof TimeoutException) {\n- throw new RpcException(RpcException.TIMEOUT_EXCEPTION, \"Invoke remote method timeout. method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(RpcException.TIMEOUT_EXCEPTION, \"Invoke remote method timeout. method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n } else if (t instanceof RemotingException) {\n- throw new RpcException(RpcException.NETWORK_EXCEPTION, \"Failed to invoke remote method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(RpcException.NETWORK_EXCEPTION, \"Failed to invoke remote method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ } else {\n+ throw new RpcException(RpcException.UNKNOWN_EXCEPTION, \"Fail to invoke remote method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n }\n } catch (Throwable e) {\n throw new RpcException(e.getMessage(), e);"""
+
+
+## Sentences of the Example Commit 2 (Separated by Source).
+
+The sentences we have already labeled are shown with their corresponding labels. Sentences without any labels (i.e., those that do not contain rationale information) have empty labels.
+
+The following sentences come from the commit message
+
+Id: 2653_1_1_0
+Source: COMMIT_MESSAGE
+Sentence:
+"""throw unknown exception (#5849)"""
+Label: GOAL
+
+The following sentences come from the comments of the changed code.
+
+Id: 2653_2_40_0
+Source: CODE_COMMENT
+Sentence: 
+"""NOTICE! must call {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} because {@link java.util.concurrent.CompletableFuture#get()} was proved to have serious performance drop."""
+Label:
+
+The following sentences come from the pull request: https://github.com/apache/dubbo/pull/5849, associated with the commit
+
+
+Id: 2653_6_4_0
+Source: PULL_REQUEST
+Sentence:
+"""In `AsyncToSyncInvoker`, when `ExecutionException` happens, only `TimeoutException` and `RemotingException` are handled and wrapped as `RpcException` and re-throw."""
+Label: NEED
+
+Id: 2653_6_4_1
+Source: PULL_REQUEST
+Sentence:
+"""The problem here is other exception will be swallowed silently."""
+Label: NEED
+
+Id: 2653_6_11_0
+Source: PULL_REQUEST
+Sentence:
+"""fix #5855"""
+Label:
+
+Id: 2653_6_4_3
+Source: PULL_REQUEST
+Sentence:
+""""wrap other exception in `RpcException` and rethrow."""
+Label: GOAL

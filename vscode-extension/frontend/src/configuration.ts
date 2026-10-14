@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
+import type { CliProvider } from "./cliVersion";
 import type { BackendClient } from "./backend";
-import { CliUpdateRequiredError, ensureSupportedCli, offerCliUpdate, runCommand } from "./cli";
+import { CliUpdateRequiredError, cliSetupMessage, ensureSupportedCli, offerCliUpdate, runCommand } from "./cli";
 
 export type RunMode = "api" | "cli";
 export type Provider = "openai" | "anthropic" | "codex" | "claude-code";
@@ -109,8 +110,10 @@ export function openConfigurationPage(context: vscode.ExtensionContext, backend:
         panel.webview.postMessage({ type: "connection", requestId: message.requestId, valid: true, message: `✓ Connected. ${llm.model} responded to the test prompt. You can save now.` });
       } catch (error) {
         if (test !== latestTest) return;
-        const hint = message.mode === "cli" ? " Make sure the CLI is installed, available on VS Code's PATH, and signed in. Restart VS Code if you recently installed it or changed PATH." : "";
-        panel.webview.postMessage({ type: "connection", requestId: message.requestId, valid: false, message: `Connection test failed: ${(error as Error).message}${hint}` });
+        const failure = message.mode === "cli" && !(error instanceof CliUpdateRequiredError)
+          ? cliSetupMessage(message.provider as CliProvider)
+          : `Connection test failed: ${(error as Error).message}`;
+        panel.webview.postMessage({ type: "connection", requestId: message.requestId, valid: false, message: failure });
         if (error instanceof CliUpdateRequiredError) void offerCliUpdate(error);
       }
       return;
@@ -161,14 +164,14 @@ async function refreshModels(
     panel.webview.postMessage({ type: "models", requestId, valid: true, models, current, message: `Loaded ${models.length} model choices. Choose a model, then test the connection.` });
   } catch (error) {
     const current = context.globalState.get<string>(`model:${provider}`, defaults[provider].model);
-    const hint = mode === "cli"
-      ? "Make sure the CLI is installed and available on VS Code's PATH. Restart VS Code if you recently installed it or changed PATH, then click Load models again."
-      : "Check your API key, then click Load models again.";
+    const failure = mode === "cli" && !(error instanceof CliUpdateRequiredError)
+      ? cliSetupMessage(provider as CliProvider)
+      : `Could not load models: ${(error as Error).message.replace(/[.]+$/, "")}.${mode === "api" ? " Check your API key, then click Load models again." : ""}`;
     panel.webview.postMessage({
       type: "models", requestId, valid: false,
       models: current ? [{ id: current, name: `${current} (saved; refresh failed)` }] : [],
       current,
-      message: `Could not load models: ${(error as Error).message}. ${hint}`,
+      message: failure,
     });
   }
 }

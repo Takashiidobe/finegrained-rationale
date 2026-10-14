@@ -78,9 +78,7 @@ test('failed tests and missing keys never write settings', async () => {
   const page = setup(async () => { throw new Error('Please sign in'); });
   await page.receive({ type: 'testConnection', ...cli });
   assert.equal(page.messages.at(-1).valid, false);
-  assert.match(page.messages.at(-1).message, /Please sign in/);
-  assert.match(page.messages.at(-1).message, /VS Code's PATH/);
-  assert.match(page.messages.at(-1).message, /Restart VS Code/);
+  assert.equal(page.messages.at(-1).message, 'Make sure Claude Code CLI is installed, on your $PATH, and you are logged in.');
   await page.receive({ type: 'save', ...cli });
   assert.equal(page.messages.at(-1).type, 'saveFailed');
   await page.receive({ type: 'testConnection', ...api, apiKey: '' });

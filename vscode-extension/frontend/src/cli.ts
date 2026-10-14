@@ -4,6 +4,10 @@ import { checkCliVersion, CLI_NAMES, CLI_UPDATE_COMMANDS, type CliProvider } fro
 
 const CLI_COMMANDS: Record<CliProvider, string> = { codex: "codex", "claude-code": "claude" };
 
+export function cliSetupMessage(provider: CliProvider): string {
+  return `Make sure ${CLI_NAMES[provider]} is installed, on your $PATH, and you are logged in.`;
+}
+
 export class CliUpdateRequiredError extends Error {
   constructor(message: string, readonly provider: CliProvider) {
     super(message);
@@ -28,7 +32,7 @@ export async function ensureSupportedCli(provider: CliProvider): Promise<string>
     output = await runCommand(CLI_COMMANDS[provider], ["--version"]);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`${CLI_NAMES[provider]} was not found on PATH. Install it and sign in, then try again.`);
+      throw new Error(cliSetupMessage(provider));
     }
     throw error;
   }

@@ -4,3 +4,10 @@ venv/*
 !/vscode-extension/.vscode/
 !/vscode-extension/.vscode/launch.json
 !/vscode-extension/.vscode/tasks.json
+
+/experiments/**
+!/experiments/**/
+!/experiments/**/.rationale/**/*.md
+!/experiments/prompts/*.md
+!/experiments/runs/**/rationale_generation_prompt.txt
+!/experiments/runs/**/identification_prompt.txt

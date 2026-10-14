@@ -1,0 +1,112 @@
+Generate an evidence-backed commit rationale for torvalds/linux.
+
+Review all supplied annotated sentences before writing. Evidence may be in the
+commit message, PR description, issue discussion, or inline review replies.
+Treat the diff as context only. It cannot establish the developer's rationale.
+
+First, privately build an evidence inventory for each component:
+- GOAL: objectives explicitly stated by developers.
+- NEED: problems or benefits explicitly motivating the change.
+- ALTERNATIVES: concrete approaches developers proposed, tried, compared, or
+  rejected. Include implementation alternatives discussed during review, not only
+  high-level designs. An approach that was tried and then replaced still counts.
+  Look for proposals, author responses, and follow-up decisions in the same thread.
+
+For ALTERNATIVES, check specifically for standard-library replacements, different
+algorithms, changing a data layout versus removing an annotation, keeping a
+previous approach, and suggestions later withdrawn. These are search questions,
+not evidence: report an alternative only when a supplied sentence states it and
+is labeled ALTERNATIVES. Cite the proposal, attempt, and rejection separately when
+available. Describe why an approach was rejected only if the source states why.
+Do not mistake a chronological implementation change for proof of a tradeoff.
+
+Write a concise paragraph for each component. Every sentence must be immediately
+followed by valid citations to explicitly supporting evidence for that component.
+Copy citation IDs character for character, including the full commit SHA. Never
+shorten or normalize them. Put markers directly after sentence punctuation with
+no intervening whitespace, e.g. "Supported claim.[^exact-source-id]". Separate
+sentences with a space after the last citation marker.
+Do not let one cited sentence lend apparent support to an uncited neighboring
+sentence. Do not invent technical motivations or alternatives from the diff.
+Before returning "No evidence found.", check the entire supplied evidence for
+that component. If it truly has no supported claims, return that exact phrase.
+
+## Commit diff (context only)
+File: security/landlock/domain.h
+Diff:
+@@ -242,9 +242,14 @@ struct landlock_domain {
+ 			 * to properly handle merged rulesets without
+ 			 * overlapping access rights.  These layers are set once
+ 			 * and never changed for the lifetime of the domain.
++			 *
++			 * Not annotated with __counted_by(num_layers): clang
++			 * miscomputes the counter address for a FAM nested in
++			 * an anonymous struct within a union, which trips
++			 * FORTIFY:
++			 * https://github.com/llvm/llvm-project/pull/228309
+ 			 */
+-			struct access_masks
+-				handled_masks[] __counted_by(num_layers);
++			struct access_masks handled_masks[];
+ 		};
+ 	};
+ };
+
+## Annotated artifact sentences (evidence)
+
+
+The following sentences come from the commit message
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_0
+Source: COMMIT_MESSAGE
+Sentence: landlock: Drop __counted_by from landlock_domain.handled_masks
+Labels: GOAL
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_1
+Source: COMMIT_MESSAGE
+Sentence: With clang 22 and CONFIG_FORTIFY_SOURCE, the second landlock_restrict_self() call hits a bogus fortify report in inherit_ruleset():
+Labels: NEED
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_3
+Source: COMMIT_MESSAGE
+Sentence: handled_masks[] lives in an anonymous struct inside the anonymous union that overlays work_free.
+Labels: GOAL
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_4
+Source: COMMIT_MESSAGE
+Sentence: For such a flexible array, clang computes the address of the __counted_by counter as the start of the array instead of &num_layers.
+Labels: NEED
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_5
+Source: COMMIT_MESSAGE
+Sentence: The bound is then read from handled_masks[0], i.e. from the first layer's access masks, which is not a count.
+Labels: NEED
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_7
+Source: COMMIT_MESSAGE
+Sentence: The annotation was added as documentation, so drop it rather than restructure the union.
+Labels: ALTERNATIVES
+
+Add Markdown footnote markers [^source-id] immediately after every sentence.
+Replace source-id with its exact ID from the evidence. Cite only IDs listed below,
+and only in components matching their labels. Use multiple markers when combining
+evidence. Do not invent IDs or write footnote definitions.
+
+Every claim must be explicitly supported by a cited artifact sentence. Code diffs
+and selected code are context only, never evidence of rationale. If a component
+has no supported claims, return exactly "No evidence found." If there are no
+allowed source IDs, return "No evidence found." for all three components.
+
+Allowed source IDs and component labels:
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_0 (GOAL)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_1 (NEED)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_3 (GOAL)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_4 (NEED)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_5 (NEED)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_7 (ALTERNATIVES)
+
+
+Return only these labels and their paragraphs; do not output the private inventory:
+GOAL: ...
+NEED: ...
+ALTERNATIVES: ...

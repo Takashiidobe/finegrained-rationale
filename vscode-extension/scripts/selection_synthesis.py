@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from llm_provider import generate_text
-from rationale_sources import citation_instructions, resolve_component_citations
+from rationale_sources import citation_aliases, citation_instructions, render_prompt, resolve_component_citations, shorten_citations
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,11 +21,16 @@ def main() -> None:
     data = json.loads(Path(args.input).read_text(encoding="utf-8"))
     commit_context = []
     references = {}
+    summaries = []
     for commit in data["commits"]:
         summary = json.loads(Path(commit["summary_path"]).read_text(encoding="utf-8"))
-        components = summary.get("components", {})
+        summaries.append((commit, summary))
         for reference in summary.get("references", []):
             references[reference["id"]] = reference
+    sources = list(references.values())
+    aliases = citation_aliases(sources)
+    for commit, summary in summaries:
+        components = {label: shorten_citations(text, aliases) for label, text in summary.get("components", {}).items()}
         commit_context.append(
             f"Commit: {commit['sha']} ({commit['lines']} selected lines)\n"
             f"URL: {commit['url']}\n"
@@ -33,45 +38,29 @@ def main() -> None:
             f"NEED: {components.get('NEED', '')}\n"
             f"ALTERNATIVES: {components.get('ALTERNATIVES', '')}"
         )
-    # Prompt for synthesizing a body of code
-    prompt = f"""Explain the rationale for a selected piece of code by synthesizing the evidence below.
-Describe how the commits contribute to the selected code as one coherent explanation. Ground claims in the supplied summaries and code; do not invent motives or fill gaps with speculation. If evidence is incomplete or the summaries disagree, say so. Keep the three requested components distinct.
-
-Repository: {data['repository']}
-File: {data['file']}, lines {data['start_line']}-{data['end_line']}
-
-Selected code:
-```text
-{data['code']}
-```
-
-Top contributing commit summaries (ranked by number of selected lines):
-{chr(10).join(commit_context)}
-
-Return exactly these three labels, each followed by a concise paragraph:
-GOAL: ...
-NEED: ...
-ALTERNATIVES: ..."""
-    sources = list(references.values())
-    if sources:
-        prompt += (
-            "\n\nOriginal evidence:\n"
-            + "\n".join(
-                f"Id: {ref['id']}\nSource: {ref['source']}\nSentence: {ref['sentence']}"
-                for ref in sources
-            )
-            + citation_instructions(sources)
-        )
+    prompt = render_prompt(
+        "selection-rationale.md", repository=data["repository"], file=data["file"],
+        start_line=data["start_line"], end_line=data["end_line"], code=data["code"],
+        commit_context="\n\n".join(commit_context),
+        sentences_information="\n\n".join(
+            f"Id: {aliases[ref['id']]}\nSource: {ref['source']}\nSentence: {ref['sentence']}\nLabels: {', '.join(ref['labels'])}"
+            for ref in sources
+        ),
+        citation_instructions=citation_instructions(sources),
+    )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     (output_path.parent / f"{output_path.stem}.prompt.txt").write_text(
         prompt, encoding="utf-8"
     )
-    response = generate_text(prompt, args.model)
+    response = generate_text(prompt, args.model) if sources else "\n".join(
+        f"{label}: No evidence found." for label in ("GOAL", "NEED", "ALTERNATIVES")
+    )
     components = resolve_component_citations(parse_components(response), sources)
     output_path.write_text(
         json.dumps(
-            {"raw_response": response, "components": components, "references": sources},
+            {"raw_response": response, "components": components, "references": sources,
+             "citation_aliases": {alias: reference_id for reference_id, alias in aliases.items()}},
             indent=2,
         ),
         encoding="utf-8",

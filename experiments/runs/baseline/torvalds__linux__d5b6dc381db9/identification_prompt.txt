@@ -1,0 +1,706 @@
+# Task summary
+
+You are an experienced Java programmer on the torvalds/linux project. Your task is to analyze a set of sentences, identify whether they express the rationale behind a target code commit, and annotate them according to a taxonomy of rationale components.
+
+You will be provided with:
+* A list of rationale components, each one describing a different aspect that explains why the code was changed the way it was.
+* The diff of the target commit, which shows how one or more code files were changed.
+* A list of sentences extracted from different sources (artifacts) related to the commit, namely the commit message, pull requests, issue reports, code review comments, Javadoc comments, and inline/block code comments of the changed code.
+
+# Instructions
+* Analyze the content of the sentences, identify the rationale components that they describe, and annotate them with those components.
+* Annotate the sentences individually using one or more of the provided rationale components only if the sentence contains information about those components.
+* If a sentence does not describe any of the rationale components, do not include that sentence in your response.
+* In your response, provide only the sentence ID and the component(s); do not include any additional information.
+* Provide your response in CSV format.
+
+# Important
+Each sentence ID follows the format: CommitID_SourceID_TextID_LocalSentenceID. The IDs in this format are numbers that we use to identify different artifacts and text snippets within these artifacts. If consecutive sentences share the same CommitID_SourceID_TextID, it means they are logically grouped within the artifacts' text. For labeling the sentences, consider these groups as context (as they may give more information about the sentences), but still label the sentences individually.
+
+# Inputs
+
+## Rationale Components
+1. GOAL: Describes what changes have been made by the developer in the code change. This is a high-level or low-level description of the code change, indicating what the developer aims to achieve with the code change.
+
+2. NEED: Describes the specific reason, motivation, or benefit of the code change. This indicates why the developer wants to make the code change.
+
+3. ALTERNATIVES: Describes other potential solutions considered by the developers before making the final code change. This indicates the alternative solutions discussed by the developers, but not implemented for the code change.
+
+## Diff of the Target Commit
+1. 
+File: drivers/scsi/ch.c
+Diff:
+"""@@ -112,7 +112,6 @@ typedef struct {
+ 	int                 minor;
+ 	char                name[8];
+ 	struct scsi_device  *device;
+-	struct scsi_device  **dt;        /* ptrs to data transfer elements */
+ 	u_int               firsts[CH_TYPES];
+ 	u_int               counts[CH_TYPES];
+ 	u_int		    voltags;
+@@ -363,15 +362,10 @@ ch_readconfig(scsi_changer *ch)
+ 			vendor_labels[i]);
+ 	}
+ 
+-	/* look up the devices of the data transfer elements */
+-	ch->dt = kzalloc_objs(*ch->dt, ch->counts[CHET_DT]);
+-
+-	if (!ch->dt) {
+-		kfree(buffer);
+-		return -ENOMEM;
+-	}
+-
++	/* report the devices of the data transfer elements */
+ 	for (elem = 0; elem < ch->counts[CHET_DT]; elem++) {
++		struct scsi_device *sdev;
++
+ 		id  = -1;
+ 		lun = 0;
+ 		if (elem < CH_DT_MAX  &&  -1 != dt_id[elem]) {
+@@ -387,10 +381,8 @@ ch_readconfig(scsi_changer *ch)
+ 			VPRINTK(KERN_INFO, "dt 0x%x: ",elem+ch->firsts[CHET_DT]);
+ 			if (data[6] & 0x80) {
+ 				VPRINTK(KERN_CONT, "not this SCSI bus\n");
+-				ch->dt[elem] = NULL;
+ 			} else if (0 == (data[6] & 0x30)) {
+ 				VPRINTK(KERN_CONT, "ID/LUN unknown\n");
+-				ch->dt[elem] = NULL;
+ 			} else {
+ 				id  = ch->device->id;
+ 				lun = 0;
+@@ -400,18 +392,16 @@ ch_readconfig(scsi_changer *ch)
+ 		}
+ 		if (-1 != id) {
+ 			VPRINTK(KERN_CONT, "ID %i, LUN %i, ",id,lun);
+-			ch->dt[elem] =
+-				scsi_device_lookup(ch->device->host,
+-						   ch->device->channel,
+-						   id,lun);
+-			if (!ch->dt[elem]) {
++			sdev = scsi_device_lookup(ch->device->host,
++						  ch->device->channel,
++						  id, lun);
++			if (!sdev) {
+ 				/* should not happen */
+ 				VPRINTK(KERN_CONT, "Huh? device not found!\n");
+ 			} else {
+ 				VPRINTK(KERN_CONT, "name: %8.8s %16.16s %4.4s\n",
+-					ch->dt[elem]->vendor,
+-					ch->dt[elem]->model,
+-					ch->dt[elem]->rev);
++					sdev->vendor, sdev->model, sdev->rev);
++				scsi_device_put(sdev);
+ 			}
+ 		}
+ 	}
+@@ -575,7 +565,6 @@ static void ch_destroy(struct kref *ref)
+ 	scsi_changer *ch = container_of(ref, scsi_changer, ref);
+ 
+ 	ch->device = NULL;
+-	kfree(ch->dt);
+ 	kfree(ch);
+ }
+ """
+
+2. 
+File: drivers/scsi/qedi/qedi_main.c
+Diff:
+"""@@ -2652,8 +2652,6 @@ static int __qedi_probe(struct pci_dev *pdev, int mode)
+ 	snprintf(host_buf, sizeof(host_buf), "host_%d", qedi->shost->host_no);
+ 	qedi_ops->common->set_name(qedi->cdev, host_buf);
+ 
+-	qedi_ops->register_ops(qedi->cdev, &qedi_cb_ops, qedi);
+-
+ 	memset(&params, 0, sizeof(params));
+ 	params.mtu = DEF_PATH_MTU + IPV6_HDR_LEN + TCP_HDR_LEN;
+ 	qedi->ll2_mtu = DEF_PATH_MTU;
+@@ -2670,6 +2668,7 @@ static int __qedi_probe(struct pci_dev *pdev, int mode)
+ 		spin_lock_init(&qedi->task_idx_lock);
+ 		mutex_init(&qedi->stats_lock);
+ 	}
++	qedi_ops->register_ops(qedi->cdev, &qedi_cb_ops, qedi);
+ 	qedi_ops->ll2->register_cb_ops(qedi->cdev, &qedi_ll2_cb_ops, qedi);
+ 	qedi_ops->ll2->start(qedi->cdev, &params);
+ """
+
+3. 
+File: drivers/ufs/core/ufs-mcq.c
+Diff:
+"""@@ -312,28 +312,32 @@ static int ufshcd_mcq_get_tag(struct ufs_hba *hba, struct cq_entry *cqe)
+ 		UFSHCD_NUM_RESERVED;
+ }
+ 
++static void ufshcd_mcq_compl_cqe(struct ufs_hba *hba, struct cq_entry *cqe)
++{
++	int tag = ufshcd_mcq_get_tag(hba, cqe);
++
++	ufshcd_compl_one_cqe(hba, tag, cqe);
++	/* After processing the CQE, mark it as an empty (invalid) entry. */
++	cqe->command_desc_base_addr = 0;
++}
++
+ static void ufshcd_mcq_process_cqe(struct ufs_hba *hba,
+ 				   struct ufs_hw_queue *hwq)
+ {
+ 	struct cq_entry *cqe = ufshcd_mcq_cur_cqe(hwq);
+ 
+-	if (cqe->command_desc_base_addr) {
+-		int tag = ufshcd_mcq_get_tag(hba, cqe);
+-
+-		ufshcd_compl_one_cqe(hba, tag, cqe);
+-		/* After processed the cqe, mark it empty (invalid) entry */
+-		cqe->command_desc_base_addr = 0;
+-	} else {
++	if (cqe->command_desc_base_addr)
++		ufshcd_mcq_compl_cqe(hba, cqe);
++	else
+ 		dev_err(hba->dev, "Abnormal CQ entry!\n");
+-	}
+ }
+ 
+ /*
+  * This function is called from the UFS error handler with the UFS host
+  * controller disabled (HCE = 0). Reading host controller registers, e.g. the
+  * CQ tail pointer (CQTPy), may not be safe with the host controller disabled.
+  * Hence, iterate over all completion queue entries. This won't result in
+- * double completions because ufshcd_mcq_process_cqe() clears a CQE after it
++ * double completions because ufshcd_mcq_compl_cqe() clears a CQE after it
+  * has been processed.
+  */
+ void ufshcd_mcq_compl_all_cqes_lock(struct ufs_hba *hba,
+@@ -344,13 +348,13 @@ void ufshcd_mcq_compl_all_cqes_lock(struct ufs_hba *hba,
+ 
+ 	spin_lock_irqsave(&hwq->cq_lock, flags);
+ 	while (entries > 0) {
+-		ufshcd_mcq_process_cqe(hba, hwq);
++		struct cq_entry *cqe = ufshcd_mcq_cur_cqe(hwq);
++
++		if (cqe->command_desc_base_addr)
++			ufshcd_mcq_compl_cqe(hba, cqe);
+ 		ufshcd_mcq_inc_cq_head_slot(hwq);
+ 		entries--;
+ 	}
+-
+-	ufshcd_mcq_update_cq_tail_slot(hwq);
+-	hwq->cq_head_slot = hwq->cq_tail_slot;
+ 	spin_unlock_irqrestore(&hwq->cq_lock, flags);
+ }
+ """
+
+4. 
+File: drivers/ufs/core/ufshcd.c
+Diff:
+"""@@ -6044,8 +6044,6 @@ static bool ufshcd_mcq_force_compl_one(struct request *rq, void *priv)
+ 	if (blk_mq_is_reserved_rq(rq) || !hwq)
+ 		return true;
+ 
+-	ufshcd_mcq_compl_all_cqes_lock(hba, hwq);
+-
+ 	/*
+ 	 * For those cmds of which the cqes are not present in the cq, complete
+ 	 * them explicitly.
+@@ -6061,19 +6059,6 @@ static bool ufshcd_mcq_force_compl_one(struct request *rq, void *priv)
+ 	return true;
+ }
+ 
+-static bool ufshcd_mcq_compl_one(struct request *rq, void *priv)
+-{
+-	struct scsi_device *sdev = rq->q->queuedata;
+-	struct Scsi_Host *shost = sdev->host;
+-	struct ufs_hba *hba = shost_priv(shost);
+-	struct ufs_hw_queue *hwq = ufshcd_mcq_req_to_hwq(hba, rq);
+-
+-	if (!blk_mq_is_reserved_rq(rq) && hwq)
+-		ufshcd_mcq_poll_cqe_lock(hba, hwq);
+-
+-	return true;
+-}
+-
+ /**
+  * ufshcd_mcq_compl_pending_transfer - MCQ mode function. It is
+  * invoked from the error handler context or ufshcd_host_reset_and_restore()
+@@ -6088,10 +6073,18 @@ static bool ufshcd_mcq_compl_one(struct request *rq, void *priv)
+ static void ufshcd_mcq_compl_pending_transfer(struct ufs_hba *hba,
+ 					      bool force_compl)
+ {
+-	blk_mq_tagset_busy_iter(&hba->host->tag_set,
+-				force_compl ? ufshcd_mcq_force_compl_one :
+-					      ufshcd_mcq_compl_one,
+-				NULL);
++	int i;
++
++	for (i = 0; i < hba->nr_hw_queues; i++) {
++		if (force_compl)
++			ufshcd_mcq_compl_all_cqes_lock(hba, &hba->uhq[i]);
++		else
++			ufshcd_mcq_poll_cqe_lock(hba, &hba->uhq[i]);
++	}
++
++	if (force_compl)
++		blk_mq_tagset_busy_iter(&hba->host->tag_set,
++					ufshcd_mcq_force_compl_one, NULL);
+ }
+ 
+ /**
+@@ -9556,6 +9549,7 @@ static void ufshcd_async_scan(void *data, async_cookie_t cookie)
+ 	ret = ufshcd_add_lus(hba);
+ 
+ out:
++	ufshcd_release(hba);
+ 	pm_runtime_put_sync(hba->dev);
+ 
+ 	if (ret)
+@@ -11278,6 +11272,9 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
+ 
+ 	ufshcd_init_clk_gating(hba);
+ 
++	/* Released by ufshcd_async_scan(), or by out_release on failure. */
++	ufshcd_hold(hba);
++
+ 	ufshcd_init_clk_scaling(hba);
+ 
+ 	/*
+@@ -11298,7 +11295,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
+ 	err = devm_request_irq(dev, irq, ufshcd_intr, IRQF_SHARED, UFSHCD, hba);
+ 	if (err) {
+ 		dev_err(hba->dev, "request irq failed\n");
+-		goto out_disable;
++		goto out_release;
+ 	} else {
+ 		hba->is_irq_enabled = true;
+ 	}
+@@ -11314,7 +11311,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
+ 		dev_err(hba->dev, "Host controller enable failed\n");
+ 		ufshcd_print_evt_hist(hba);
+ 		ufshcd_print_host_state(hba);
+-		goto out_disable;
++		goto out_release;
+ 	}
+ 
+ 	INIT_DELAYED_WORK(&hba->rpm_dev_flush_recheck_work, ufshcd_rpm_dev_flush_recheck_work);
+@@ -11328,7 +11325,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
+ 
+ 	err = ufshcd_add_scsi_host(hba);
+ 	if (err)
+-		goto out_disable;
++		goto out_release;
+ 
+ 	/* Hold auto suspend until async scan completes */
+ 	pm_runtime_get_sync(dev);
+@@ -11348,7 +11345,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
+ 
+ 	err = ufshcd_link_startup(hba);
+ 	if (err)
+-		goto out_disable;
++		goto out_release;
+ 
+ 	if (hba->mcq_enabled)
+ 		ufshcd_config_mcq(hba);
+@@ -11365,23 +11362,23 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
+ 	/* Verify device initialization by sending NOP OUT UPIU */
+ 	err = ufshcd_verify_dev_init(hba);
+ 	if (err)
+-		goto out_disable;
++		goto out_release;
+ 
+ 	/* Initiate UFS initialization, and waiting until completion */
+ 	err = ufshcd_complete_dev_init(hba);
+ 	if (err)
+-		goto out_disable;
++		goto out_release;
+ 
+ 	err = ufshcd_device_params_init(hba);
+ 	if (err)
+-		goto out_disable;
++		goto out_release;
+ 
+ 	err = ufshcd_post_device_init(hba);
+ 
+ initialized:
+ 	ufshcd_process_probe_result(hba, probe_start, err);
+ 	if (err)
+-		goto out_disable;
++		goto out_release;
+ 
+ 	ufs_sysfs_add_nodes(hba->dev);
+ 	hba->dme_qos_sysfs_handle = sysfs_get_dirent(hba->dev->kobj.sd,
+@@ -11392,6 +11389,8 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
+ 	ufshcd_pm_qos_init(hba);
+ 	return 0;
+ 
++out_release:
++	ufshcd_release(hba);
+ out_disable:
+ 	hba->is_irq_enabled = false;
+ 	ufshcd_hba_exit(hba);"""
+
+5. 
+File: drivers/ufs/host/ufs-mediatek.c
+Diff:
+"""@@ -509,6 +509,7 @@ static int ufs_mtk_mphy_power_on(struct ufs_hba *hba, bool on)
+ 	struct ufs_mtk_host *host = ufshcd_get_variant(hba);
+ 	struct phy *mphy = host->mphy;
+ 	struct arm_smccc_res res;
++	int err;
+ 	int ret = 0;
+ 
+ 	if (!mphy || !(on ^ host->mphy_powered_on))
+@@ -523,7 +524,18 @@ static int ufs_mtk_mphy_power_on(struct ufs_hba *hba, bool on)
+ 			usleep_range(200, 210);
+ 			ufs_mtk_va09_pwr_ctrl(res, 1);
+ 		}
+-		phy_power_on(mphy);
++		ret = phy_power_on(mphy);
++		if (ret) {
++			if (ufs_mtk_is_va09_supported(hba)) {
++				ufs_mtk_va09_pwr_ctrl(res, 0);
++				err = regulator_disable(host->reg_va09);
++				if (err)
++					dev_err(hba->dev,
++						"failed to unwind va09: %d\n", err);
++			}
++			dev_err(hba->dev, "failed to enable mphy: %d\n", ret);
++			return ret;
++		}
+ 	} else {
+ 		phy_power_off(mphy);
+ 		if (ufs_mtk_is_va09_supported(hba)) {
+@@ -1295,7 +1307,9 @@ static int ufs_mtk_init(struct ufs_hba *hba)
+ 	 *
+ 	 * Enable phy clocks specifically here.
+ 	 */
+-	ufs_mtk_mphy_power_on(hba, true);
++	err = ufs_mtk_mphy_power_on(hba, true);
++	if (err)
++		goto out_variant_clear;
+ 
+ 	if (ufs_mtk_is_rtff_mtcmos(hba)) {
+ 		/* First Restore here, to avoid backup unexpected value */"""
+
+## Sentences to Annotate (Separated by Source)
+
+
+The following sentences come from the commit message
+
+Id: 55429305_1_1_0
+Source: COMMIT_MESSAGE
+Sentence: 
+"""Merge tag 'scsi-fixes' of git://git.kernel.org/pub/scm/linux/kernel/git/jejb/scsi"""
+
+Id: 55429305_1_1_1
+Source: COMMIT_MESSAGE
+Sentence: 
+"""Pull SCSI fixes from James Bottomley: "Driver (and tape media changer) only fixes."""
+
+Id: 55429305_1_1_2
+Source: COMMIT_MESSAGE
+Sentence: 
+"""Three of the fixes are about the same size, (ch, ufs decouble CQ and ufs avoid unsafe MMIO) but the unsafe MMIO is the least obvious logic change""""
+
+Id: 55429305_1_1_3
+Source: COMMIT_MESSAGE
+Sentence: 
+"""* tag 'scsi-fixes' of git://git.kernel.org/pub/scm/linux/kernel/git/jejb/scsi: scsi: ufs: core: Decouple CQ sweep from request iterator in MCQ scsi: ufs: core: Avoid unsafe MMIO reads in ufshcd_mcq_compl_all_cqes_lock() scsi: ch: Do not keep references to data transfer element devices scsi: ufs: mediatek: Handle mPHY power-on failures scsi: qedi: Initialize callback state before registration scsi: ufs: core: Hold a clock reference across the probe"""
+
+# Response Format (CSV)
+
+sentence_id, labels
+<ID1>, "<LABEL1>, ..."
+
+
+# Example for Illustration Purposes
+
+Below, I am providing 2 example commits with the code diff and extracted sentences for that commit with the expected rationale component labels. Use the examples only for learning purposes.
+
+## Diff of the Example Commit 1
+1.
+File: src/main/java/org/junit/rules/ExpectedException.java
+Diff:
+"""@@ -43,8 +43,8 @@
+* public void throwsIllegalArgumentExceptionWithMessageAndCause() {
+* NullPointerException expectedCause = new NullPointerException();
+* thrown.expect(IllegalArgumentException.class);
+- * thrown.expectMessage(&quot;happened?&quot;);
+- * thrown.expectCause(expectedCause);
++ * thrown.expectMessage(&quot;What&quot;);
++ * thrown.expectCause(is(expectedCause));
+* throw new IllegalArgumentException(&quot;What happened?&quot;, cause);
+* }
+* }
+@@ -106,8 +106,12 @@ public void expectMessage(Matcher<String> matcher) {
+expect(hasMessage(matcher));
+}
+
+- public void expectCause(Throwable expectedCause) {
+- expect(causeEquals(expectedCause));
++ /**
++ * Adds {@code matcher} to the list of requirements for the cause of
++ * any thrown exception.
++ */
++ public void expectCause(Matcher<? extends Throwable> expectedCause) {
++ expect(hasCause(expectedCause));
+}
+
+private class ExpectedExceptionStatement extends Statement {
+@@ -147,16 +151,16 @@ public boolean matchesSafely(Throwable item) {
+};
+}
+
+- private Matcher<Throwable> causeEquals(final Throwable expectedCause) {
++ private Matcher<Throwable> hasCause(final Matcher<? extends Throwable> causeMatcher) {
+return new TypeSafeMatcher<Throwable>() {
+- @Override
+- public boolean matchesSafely(Throwable item) {
+- return expectedCause == null ? item.getCause() == null : expectedCause.equals(item.getCause());
+- }
+-
+public void describeTo(Description description) {
+description.appendText("exception with cause ");
+- description.appendText(expectedCause.toString());
++ description.appendDescriptionOf(causeMatcher);
++ }
++
++ @Override
++ public boolean matchesSafely(Throwable item) {
++ return causeMatcher.matches(item.getCause());
+}
+};
+}"""
+
+2.
+File: src/test/java/org/junit/tests/experimental/rules/ExpectedExceptionRuleTest.java
+Diff:
+"""@@ -1,18 +1,21 @@
+package org.junit.tests.experimental.rules;
+
+-import static org.hamcrest.CoreMatchers.any;
+-import static org.junit.Assert.assertThat;
+-import static org.junit.experimental.results.PrintableResult.testResult;
+-import static org.junit.experimental.results.ResultMatchers.hasSingleFailureContaining;
+-import static org.junit.experimental.results.ResultMatchers.isSuccessful;
+-import static org.junit.matchers.JUnitMatchers.both;
++import org.hamcrest.CoreMatchers;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.internal.matchers.TypeSafeMatcher;
+import org.junit.rules.ExpectedException;
+
++import static org.hamcrest.CoreMatchers.any;
++import static org.hamcrest.CoreMatchers.is;
++import static org.junit.Assert.assertThat;
++import static org.junit.experimental.results.PrintableResult.testResult;
++import static org.junit.experimental.results.ResultMatchers.hasSingleFailureContaining;
++import static org.junit.experimental.results.ResultMatchers.isSuccessful;
++import static org.junit.matchers.JUnitMatchers.both;
++
+public class ExpectedExceptionRuleTest {
+public static class HasExpectedException {
+@Rule
+@@ -42,7 +45,7 @@ public void throwsIllegalArgumentExceptionWithCause() {
+
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(expectedCause);
++ thrown.expectCause(is(expectedCause));
+
+throw new IllegalArgumentException("Ack!", expectedCause);
+}
+@@ -51,7 +54,7 @@ public void throwsIllegalArgumentExceptionWithCause() {
+public void throwsIllegalArgumentExceptionWithCauseExplicitlyNull() {
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(null);
++ thrown.expectCause(CoreMatchers.<Throwable>nullValue());
+
+throw new IllegalArgumentException("Ack!");
+}
+@@ -260,7 +263,7 @@ public static class HasWrongCause {
+public void throwWithCause() {
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(EXPECTED_CAUSE);
++ thrown.expectCause(is(EXPECTED_CAUSE));
+
+throw new IllegalArgumentException("Ack!", new NullPointerException("an unexpected cause"));
+}"""
+
+## Sentences of the Example Commit 1 (Separated by Source).
+
+The sentences we have already labeled are shown with their corresponding labels. Sentences without any labels (i.e., those that do not contain rationale information) have empty labels.
+
+The following sentences come from the commit message:
+
+Id: 756_1_1_0
+Source: COMMIT_MESSAGE
+Sentence:
+"""changed the expectedCause() method to accept a Matcher instead of an explicit Throwable and made some documentation changes"""
+Label: GOAL
+
+The following sentences come from the Javadoc comments of the class(src/main/java/org/junit/rules/ExpectedException.java#ExpectedException) that were changed:
+
+Id: 756_3_5_0
+Source: CLASS_JAVADOCS
+Sentence:
+"""The ExpectedException Rule allows in-test specification of expected exception types and messages: <pre> // These tests all pass."""
+Label:
+
+Id: 756_3_2_0
+Source: CLASS_JAVADOCS
+Sentence:
+"""thrown.expectMessage(&quot;What&quot;); thrown.expectCause(is(expectedCause));"""
+Label:
+Reason: This sentence contains source code that checks the exception class's cause and messages during testing. It is unrelated to the target code change. It doesn‚Äôt describe what changes were made or why, nor does it propose alternative solutions to the current implementation. Therefore, it is not labeled as GOAL, NEED, or ALTERNATIVES.
+
+The following sentences come from the Javadoc comments of the method(src/main/java/org/junit/rules/ExpectedException.java#expectCause) that were changed
+
+Id: 756_4_28_0
+Source: METHOD_JAVADOCS
+Sentence:
+"""Adds {@code matcher} to the list of requirements for the cause of any thrown exception."""
+Label: GOAL
+
+The following sentences come from the pull_request: https://github.com/junit-team/junit4/pull/377, associated with the commit
+
+Id: 756_6_7_0
+Source: PULL_REQUEST
+Sentence:
+"""Enable ExpectedException to match causes more easily"""
+Label: NEED
+
+Id: 756_6_8_0
+Source: PULL_REQUEST
+Sentence:
+"""When working especially with third-party libraries, it's common to deal with checked exceptions in a way similar to this:
+
+``` java
+try {
+collaborator.something();
+}
+catch (CheckedException e) {
+throw new MyRuntimeException("failed to do something", e);
+}
+```
+
+It's common for different instances of MyRuntimeException to be thrown from many possible execution branches, so when testing this, I would like to do something like:
+
+``` java
+@Rule
+ExpectedException thrown= ExpectedException.none();
+
+@Test
+public void aTest() throws Exception {
+CheckedException expected = new CheckedException("expected");
+
+Mockito.when(collaborator.something()).thenThrow(expected);
+
+thrown.expect(MyRuntimeException.class);
+thrown.expectMessage("failed to do something");
+thrown.expectCause(expected);
+
+myObject.method();
+}"""
+Label: 
+
+Id: 756_6_8_4
+Source: PULL_REQUEST
+Sentence:
+"""I realise you can do that with a custom matcher as well, but it feels like this is (at least nearly) as fundamental as matching on the message, so it should perhaps be a part of the core framework?"""
+Label: ALTERNATIVES, NEED
+
+Id: 756_6_9_1
+Source: PULL_REQUEST
+Sentence:
+"""One concern I have is that many custom exceptions don't have well-defined equals() methods."""
+Label:
+
+Id: 756_6_9_2
+Source: PULL_REQUEST
+Sentence:
+"""What about one of these ideas:
+
+thrown.expectCause(instanceOf(CheckedException.class));
+
+Or, trickier:
+
+thrown.onCause().expectMessage("failed to do something"), where onCause() returns an ExpectedException itself (haven't thought about how hard this would be)."""
+Label: ALTERNATIVES
+
+Id: 756_6_10_0
+Source: PULL_REQUEST
+Sentence:
+"""Hm, in the initial implementation, I actually didn't check equals but ==."""
+Label:
+
+Id: 756_6_10_1
+Source: PULL_REQUEST
+Sentence:
+"""I can't remember why I changed it now, but using == feels a little better in some ways - I can't think of a scenario where some code would want to do for instance a clone of an exception that was thrown, and wrapping it in another cause would require the comparison to be recursive."""
+Label:
+
+Id: 756_6_11_1
+Source: PULL_REQUEST
+Sentence:
+"""I still think that having expectCause take a Matcher means more flexibility for everyone."""
+Label: NEED
+
+Id: 756_6_11_2
+Source: PULL_REQUEST
+Sentence:
+"""Developers can use thrown.expectCause(is(expected)) when they want the exact exception, and other matchers when they want something more generic."""
+Label: NEED
+
+## Diff of the Example Commit 2
+1.
+File: src/main/java/org/junit/rules/TemporaryFolder.java
+Diff:
+"""@@ -61,13 +61,19 @@ public Result invoke(Invocation invocation) throws RpcException {\n asyncResult.get(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);\n }\n } catch (InterruptedException e) {\n- throw new RpcException(\"Interrupted unexpectedly while waiting for remoting result to return! method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(\"Interrupted unexpectedly while waiting for remote result to return! method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n } catch (ExecutionException e) {\n Throwable t = e.getCause();\n if (t instanceof TimeoutException) {\n- throw new RpcException(RpcException.TIMEOUT_EXCEPTION, \"Invoke remote method timeout. method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(RpcException.TIMEOUT_EXCEPTION, \"Invoke remote method timeout. method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n } else if (t instanceof RemotingException) {\n- throw new RpcException(RpcException.NETWORK_EXCEPTION, \"Failed to invoke remote method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(RpcException.NETWORK_EXCEPTION, \"Failed to invoke remote method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ } else {\n+ throw new RpcException(RpcException.UNKNOWN_EXCEPTION, \"Fail to invoke remote method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n }\n } catch (Throwable e) {\n throw new RpcException(e.getMessage(), e);"""
+
+
+## Sentences of the Example Commit 2 (Separated by Source).
+
+The sentences we have already labeled are shown with their corresponding labels. Sentences without any labels (i.e., those that do not contain rationale information) have empty labels.
+
+The following sentences come from the commit message
+
+Id: 2653_1_1_0
+Source: COMMIT_MESSAGE
+Sentence:
+"""throw unknown exception (#5849)"""
+Label: GOAL
+
+The following sentences come from the comments of the changed code.
+
+Id: 2653_2_40_0
+Source: CODE_COMMENT
+Sentence: 
+"""NOTICE! must call {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} because {@link java.util.concurrent.CompletableFuture#get()} was proved to have serious performance drop."""
+Label:
+
+The following sentences come from the pull request: https://github.com/apache/dubbo/pull/5849, associated with the commit
+
+
+Id: 2653_6_4_0
+Source: PULL_REQUEST
+Sentence:
+"""In `AsyncToSyncInvoker`, when `ExecutionException` happens, only `TimeoutException` and `RemotingException` are handled and wrapped as `RpcException` and re-throw."""
+Label: NEED
+
+Id: 2653_6_4_1
+Source: PULL_REQUEST
+Sentence:
+"""The problem here is other exception will be swallowed silently."""
+Label: NEED
+
+Id: 2653_6_11_0
+Source: PULL_REQUEST
+Sentence:
+"""fix #5855"""
+Label:
+
+Id: 2653_6_4_3
+Source: PULL_REQUEST
+Sentence:
+""""wrap other exception in `RpcException` and rethrow."""
+Label: GOAL

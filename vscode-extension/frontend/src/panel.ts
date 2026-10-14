@@ -48,29 +48,34 @@ export function showExplanation(result: ExplainResult): void {
       ? `<a href="${escapeHtml(commitUrl)}"><code>${escapeHtml(result.commitSha.slice(0, 12))}</code></a>`
       : `<code>${escapeHtml(result.commitSha.slice(0, 12))}</code>`;
   const references = result.references || [];
-  const marker = (number: number): string => references.some(reference => reference.number === number)
-    ? `<sup><a href="#source-${number}">${number}</a></sup>` : "";
-  const renderText = (value: string): string => escapeHtml(value).replace(/\[\^(\d+)\]/g, (_, number: string) => marker(Number(number)));
+  const marker = (number: number): string => {
+    const reference = references.find(reference => reference.number === number);
+    if (!reference) return "";
+    return `<a href="#source-${number}">${number}</a>`;
+  };
+  const renderText = (value: string): string => escapeHtml(value).replace(/\[\^\d+\](?:(?:,\s*|\s*)\[\^\d+\])*/g, (group: string) => {
+    const links = [...group.matchAll(/\[\^(\d+)\]/g)].map(match => marker(Number(match[1]))).filter(Boolean);
+    return links.length ? `<sup>${links.join(", ")}</sup>` : "";
+  });
   const component = (label: string, value: string, key: RationaleComponent): string => `
     <section>
       <h2>${label}</h2>
-      <p>${renderText(value || "Not identified.")}</p>
-      ${result.evidence?.[key]?.length ? `<p class="muted">ARGUS ${key} evidence: ${result.evidence[key]!.map(marker).join(" ")}</p>` : ""}
+      <p>${renderText(value || "No evidence found.")}</p>
     </section>`;
   const sources = references.length ? `<section><h2>References</h2><ol>${references.map(reference => `
-    <li id="source-${reference.number}"><a href="${escapeHtml(reference.url)}">${escapeHtml(referenceLabel(reference.source))}</a><p>${escapeHtml(reference.sentence)}</p></li>`).join("")}</ol></section>` : "";
+    <li id="source-${reference.number}"><a href="${escapeHtml(reference.url)}">${escapeHtml(referenceLabel(reference.source, reference.url))}</a><p>${escapeHtml(reference.sentence)}</p></li>`).join("")}</ol></section>` : "";
   p.webview.html = `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-      body { color: var(--vscode-foreground); background: var(--vscode-editor-background); font: var(--vscode-font); max-width: 900px; margin: 0 auto; padding: 24px; }
+      body { color: var(--vscode-foreground); background: var(--vscode-editor-background); font: var(--vscode-font); max-width: 900px; margin: 0 auto; padding: 12px; }
       h1 { margin-bottom: 4px; } h2 { font-size: 1.05em; letter-spacing: .04em; }
       .muted { color: var(--vscode-descriptionForeground); }
       a { color: var(--vscode-textLink-foreground); }
-      section { border: 1px solid var(--vscode-panel-border); padding: 16px; margin: 16px 0; }
-      section p { white-space: pre-wrap; line-height: 1.55; }
+      section { border: 1px solid var(--vscode-panel-border); padding: 10px 12px; margin: 8px 0; }
+      section p { margin: 6px 0; white-space: pre-wrap; line-height: 1.55; }
       code { color: var(--vscode-textLink-foreground); }
     </style>
   </head>

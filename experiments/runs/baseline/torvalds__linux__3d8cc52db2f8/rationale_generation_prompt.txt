@@ -1,0 +1,93 @@
+Generate concise rationale for a commit in torvalds/linux using the annotated
+sentences below. The diff provides technical context only; it is not evidence of
+intent, motivation, or alternatives. Do not infer rationale from implementation
+changes or describe a change as a reason for making it.
+
+GOAL describes the developer's stated objective.
+NEED describes the stated reason, motivation, or benefit.
+ALTERNATIVES describes other solutions explicitly considered by the developers.
+
+Combine relevant sentences without adding unsupported claims. Keep wording close
+to the evidence. Every sentence must have a citation to evidence that explicitly
+supports it and is labeled for that component. If a component has no supported
+claims, write "No evidence found." Do not invent motives or fill gaps.
+
+## Commit diff (context only)
+File: security/landlock/domain.h
+Diff:
+@@ -242,9 +242,14 @@ struct landlock_domain {
+ 			 * to properly handle merged rulesets without
+ 			 * overlapping access rights.  These layers are set once
+ 			 * and never changed for the lifetime of the domain.
++			 *
++			 * Not annotated with __counted_by(num_layers): clang
++			 * miscomputes the counter address for a FAM nested in
++			 * an anonymous struct within a union, which trips
++			 * FORTIFY:
++			 * https://github.com/llvm/llvm-project/pull/228309
+ 			 */
+-			struct access_masks
+-				handled_masks[] __counted_by(num_layers);
++			struct access_masks handled_masks[];
+ 		};
+ 	};
+ };
+
+## Annotated artifact sentences (evidence)
+
+
+The following sentences come from the commit message
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_0
+Source: COMMIT_MESSAGE
+Sentence: landlock: Drop __counted_by from landlock_domain.handled_masks
+Labels: GOAL
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_1
+Source: COMMIT_MESSAGE
+Sentence: With clang 22 and CONFIG_FORTIFY_SOURCE, the second landlock_restrict_self() call hits a bogus fortify report in inherit_ruleset():
+Labels: NEED
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_3
+Source: COMMIT_MESSAGE
+Sentence: handled_masks[] lives in an anonymous struct inside the anonymous union that overlays work_free.
+Labels: GOAL
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_4
+Source: COMMIT_MESSAGE
+Sentence: For such a flexible array, clang computes the address of the __counted_by counter as the start of the array instead of &num_layers.
+Labels: NEED
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_5
+Source: COMMIT_MESSAGE
+Sentence: The bound is then read from handled_masks[0], i.e. from the first layer's access masks, which is not a count.
+Labels: NEED
+
+Id: 3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_7
+Source: COMMIT_MESSAGE
+Sentence: The annotation was added as documentation, so drop it rather than restructure the union.
+Labels: ALTERNATIVES
+
+Add Markdown footnote markers [^source-id] immediately after every sentence.
+Replace source-id with its exact ID from the evidence. Cite only IDs listed below,
+and only in components matching their labels. Use multiple markers when combining
+evidence. Do not invent IDs or write footnote definitions.
+
+Every claim must be explicitly supported by a cited artifact sentence. Code diffs
+and selected code are context only, never evidence of rationale. If a component
+has no supported claims, return exactly "No evidence found." If there are no
+allowed source IDs, return "No evidence found." for all three components.
+
+Allowed source IDs and component labels:
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_0 (GOAL)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_1 (NEED)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_3 (GOAL)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_4 (NEED)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_5 (NEED)
+3d8cc52db2f86b624308321c58513019f6b21eec-12822264_1_1_7 (ALTERNATIVES)
+
+
+Return exactly these three labels, each followed by a concise paragraph:
+GOAL: ...
+NEED: ...
+ALTERNATIVES: ...

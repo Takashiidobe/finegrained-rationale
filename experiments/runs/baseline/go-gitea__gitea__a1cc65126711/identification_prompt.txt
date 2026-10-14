@@ -1,0 +1,1454 @@
+# Task summary
+
+You are an experienced Java programmer on the go-gitea/gitea project. Your task is to analyze a set of sentences, identify whether they express the rationale behind a target code commit, and annotate them according to a taxonomy of rationale components.
+
+You will be provided with:
+* A list of rationale components, each one describing a different aspect that explains why the code was changed the way it was.
+* The diff of the target commit, which shows how one or more code files were changed.
+* A list of sentences extracted from different sources (artifacts) related to the commit, namely the commit message, pull requests, issue reports, code review comments, Javadoc comments, and inline/block code comments of the changed code.
+
+# Instructions
+* Analyze the content of the sentences, identify the rationale components that they describe, and annotate them with those components.
+* Annotate the sentences individually using one or more of the provided rationale components only if the sentence contains information about those components.
+* If a sentence does not describe any of the rationale components, do not include that sentence in your response.
+* In your response, provide only the sentence ID and the component(s); do not include any additional information.
+* Provide your response in CSV format.
+
+# Important
+Each sentence ID follows the format: CommitID_SourceID_TextID_LocalSentenceID. The IDs in this format are numbers that we use to identify different artifacts and text snippets within these artifacts. If consecutive sentences share the same CommitID_SourceID_TextID, it means they are logically grouped within the artifacts' text. For labeling the sentences, consider these groups as context (as they may give more information about the sentences), but still label the sentences individually.
+
+# Inputs
+
+## Rationale Components
+1. GOAL: Describes what changes have been made by the developer in the code change. This is a high-level or low-level description of the code change, indicating what the developer aims to achieve with the code change.
+
+2. NEED: Describes the specific reason, motivation, or benefit of the code change. This indicates why the developer wants to make the code change.
+
+3. ALTERNATIVES: Describes other potential solutions considered by the developers before making the final code change. This indicates the alternative solutions discussed by the developers, but not implemented for the code change.
+
+## Diff of the Target Commit
+1. 
+File: models/renderhelper/repo_file_test.go
+Diff:
+"""@@ -9,6 +9,7 @@ import (
+ 	repo_model "gitea.dev/models/repo"
+ 	"gitea.dev/models/unittest"
+ 	"gitea.dev/modules/markup/markdown"
++	"gitea.dev/modules/test"
+ 
+ 	_ "gitea.dev/modules/markup/orgmode"
+ 
+@@ -80,6 +81,23 @@ func TestRepoFile(t *testing.T) {
+ <video src="/user2/repo1/media/commit/1234/my%20dir/LINK">
+ </video>`, rendered)
+ 	})
++
++	t.Run("PictureSource", func(t *testing.T) {
++		rctx := NewRenderContextRepoFile(t.Context(), repo1, RepoFileOptions{CurrentRefSubURL: "branch/main"}).
++			WithMarkupType(markdown.MarkupName)
++		rendered, err := testRenderString(rctx, `<picture><source media="(prefers-color-scheme: dark)" srcset="dark.svg"><img src="light.svg"></picture>`)
++		assert.NoError(t, err)
++		assert.Equal(t, test.NormalizeHTMLSpaces(`
++<p>
++	<a href="/user2/repo1/src/branch/main/light.svg" target="_blank" rel="nofollow noopener">
++		<picture>
++			<source media="(prefers-color-scheme: dark)" srcset="/user2/repo1/media/branch/main/dark.svg"/>
++			<img src="/user2/repo1/media/branch/main/light.svg"/>
++		</picture>
++	</a>
++</p>
++`), test.NormalizeHTMLSpaces(rendered))
++	})
+ }
+ 
+ func TestRepoFileOrgMode(t *testing.T) {"""
+
+2. 
+File: modules/htmlutil/html_srcset.go
+Diff:
+"""@@ -0,0 +1,105 @@
++// Copyright 2026 The Gitea Authors. All rights reserved.
++// SPDX-License-Identifier: MIT
++
++package htmlutil
++
++import (
++	"strings"
++)
++
++type SrcSetCandidate struct {
++	SrcLink string
++	SrcDesc []string
++}
++
++const (
++	asciiSpaces         = " \t\n\r\f"
++	asciiSpacesAndComma = " \t\n\r\f,"
++)
++
++func ParseSrcset(srcset string) (candidates []SrcSetCandidate) {
++	// ref: https://html.spec.whatwg.org/multipage/images.html#parse-a-srcset-attribute
++	// It can't simply use "split" because comma can appear in URLs and descriptors can be parenthesized and contain commas.
++	extractLink := func() (string, bool) {
++		srcset = strings.TrimLeft(srcset, asciiSpacesAndComma)
++		if srcset == "" {
++			return "", false
++		}
++		end := strings.IndexAny(srcset, asciiSpaces)
++		if end == -1 {
++			end = len(srcset)
++		}
++		link := srcset[:end]
++		srcset = srcset[end:]
++		if strings.HasSuffix(link, ",") {
++			return strings.TrimRight(link, ","), false
++		}
++		return link, true
++	}
++	extractDesc := func() (string, bool) {
++		srcset = strings.TrimLeft(srcset, asciiSpaces)
++		if srcset == "" {
++			return "", false
++		}
++		inParentheses := false
++		for i := range len(srcset) {
++			c := srcset[i]
++			if inParentheses {
++				inParentheses = c != ')'
++				continue
++			}
++			if c == '(' {
++				inParentheses = true
++				continue
++			}
++			if strings.IndexByte(asciiSpacesAndComma, c) != -1 {
++				desc := srcset[:i]
++				srcset = srcset[i+1:]
++				return desc, c != ','
++			}
++		}
++		desc := srcset
++		srcset = ""
++		return desc, false
++	}
++
++	for {
++		link, hasDesc := extractLink()
++		if link == "" {
++			break
++		}
++		var descriptors []string
++		if hasDesc {
++			for {
++				desc, hasMoreDesc := extractDesc()
++				if desc != "" {
++					descriptors = append(descriptors, desc)
++				}
++				if !hasMoreDesc {
++					break
++				}
++			}
++		}
++		candidates = append(candidates, SrcSetCandidate{SrcLink: link, SrcDesc: descriptors})
++	}
++	return candidates
++}
++
++func EncodeSrcset(candidates []SrcSetCandidate) string {
++	var sb strings.Builder
++	for i, c := range candidates {
++		if i != 0 {
++			sb.WriteString(", ")
++		}
++		link := c.SrcLink
++		if prefix, ok := strings.CutSuffix(link, ","); ok {
++			link = prefix + "%2C"
++		}
++		sb.WriteString(link)
++		for _, d := range c.SrcDesc {
++			sb.WriteByte(' ')
++			sb.WriteString(d)
++		}
++	}
++	return sb.String()
++}"""
+
+3. 
+File: modules/htmlutil/html_srcset_test.go
+Diff:
+"""@@ -0,0 +1,81 @@
++// Copyright 2026 The Gitea Authors. All rights reserved.
++// SPDX-License-Identifier: MIT
++
++package htmlutil
++
++import (
++	"testing"
++
++	"gitea.dev/modules/util"
++
++	"github.com/stretchr/testify/assert"
++)
++
++func TestSrcset(t *testing.T) {
++	for _, test := range []struct {
++		name       string
++		input      string
++		candidates []SrcSetCandidate
++		encoded    string
++	}{
++		{
++			name:       "bare URL",
++			input:      "image.png",
++			candidates: []SrcSetCandidate{{SrcLink: "image.png"}},
++		},
++		{
++			name:       "bare URLs",
++			input:      "a.png, b.png , c.png,",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png"}, {SrcLink: "b.png"}, {SrcLink: "c.png"}},
++			encoded:    "a.png, b.png, c.png",
++		},
++		{
++			name:       "empty candidates",
++			input:      ", ,\ta.png 1x,, ,b.png 2x, ,",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png", SrcDesc: []string{"1x"}}, {SrcLink: "b.png", SrcDesc: []string{"2x"}}},
++			encoded:    "a.png 1x, b.png 2x",
++		},
++		{
++			name:       "trailing commas in URL",
++			input:      "a.png,, b.png 2x",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png"}, {SrcLink: "b.png", SrcDesc: []string{"2x"}}},
++			encoded:    "a.png, b.png 2x",
++		},
++		{
++			name:       "comma in URL",
++			input:      "comma,in,url.png",
++			candidates: []SrcSetCandidate{{SrcLink: "comma,in,url.png"}},
++		},
++		{
++			name:       "embedded data URL",
++			input:      "data:image/png;base64,abcd 1x, image.png 2x",
++			candidates: []SrcSetCandidate{{SrcLink: "data:image/png;base64,abcd", SrcDesc: []string{"1x"}}, {SrcLink: "image.png", SrcDesc: []string{"2x"}}},
++		},
++		{
++			name:       "parenthesized descriptor",
++			input:      "a.png (x,y) 1x, b.png 2x",
++			candidates: []SrcSetCandidate{{SrcLink: "a.png", SrcDesc: []string{"(x,y)", "1x"}}, {SrcLink: "b.png", SrcDesc: []string{"2x"}}},
++		},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			candidates := ParseSrcset(test.input)
++			assert.Equal(t, test.candidates, candidates)
++			encoded := EncodeSrcset(candidates)
++			assert.Equal(t, util.IfZero(test.encoded, test.input), encoded)
++		})
++	}
++
++	t.Run("encode trailing commas", func(t *testing.T) {
++		encoded := EncodeSrcset([]SrcSetCandidate{
++			{SrcLink: "image,"},
++			{SrcLink: "image,,", SrcDesc: []string{"2x"}},
++			{SrcLink: "image.svg?variant=light,", SrcDesc: []string{"3x"}},
++		})
++		assert.Equal(t, "image%2C, image,%2C 2x, image.svg?variant=light%2C 3x", encoded)
++		assert.Equal(t, []SrcSetCandidate{
++			{SrcLink: "image%2C"},
++			{SrcLink: "image,%2C", SrcDesc: []string{"2x"}},
++			{SrcLink: "image.svg?variant=light%2C", SrcDesc: []string{"3x"}},
++		}, ParseSrcset(encoded))
++	})
++}"""
+
+4. 
+File: modules/markup/camo.go
+Diff:
+"""@@ -36,7 +36,7 @@ func b64encode(data []byte) string {
+ func camoHandleLink(link string) string {
+ 	if setting.Camo.Enabled {
+ 		lnkURL, err := url.Parse(link)
+-		if err == nil && lnkURL.IsAbs() && !strings.HasPrefix(link, setting.AppURL) &&
++		if err == nil && (lnkURL.Scheme == "http" || lnkURL.Scheme == "https") && !strings.HasPrefix(link, setting.AppURL) &&
+ 			(setting.Camo.Always || lnkURL.Scheme != "https") {
+ 			return CamoEncode(link)
+ 		}"""
+
+5. 
+File: modules/markup/camo_test.go
+Diff:
+"""@@ -15,8 +15,11 @@ func TestCamoHandleLink(t *testing.T) {
+ 	setting.AppURL = "https://gitea.com"
+ 	// Test media proxy
+ 	setting.Camo.Enabled = true
++	setting.Camo.Always = false
+ 	setting.Camo.ServerURL = "https://image.proxy"
+ 	setting.Camo.HMACKey = "geheim"
++	dataURL := "data:image/png;base64,i//V"
++	assert.Equal(t, dataURL, camoHandleLink(dataURL))
+ 
+ 	assert.Equal(t,
+ 		"https://gitea.com/img.jpg",
+@@ -29,6 +32,7 @@ func TestCamoHandleLink(t *testing.T) {
+ 		camoHandleLink("http://testimages.org/img.jpg"))
+ 
+ 	setting.Camo.Always = true
++	assert.Equal(t, dataURL, camoHandleLink(dataURL))
+ 	assert.Equal(t,
+ 		"https://gitea.com/img.jpg",
+ 		camoHandleLink("https://gitea.com/img.jpg"))"""
+
+6. 
+File: modules/markup/html.go
+Diff:
+"""@@ -355,6 +355,8 @@ func visitNode(ctx *RenderContext, procs []processor, node *html.Node) *html.Nod
+ 		return visitNodeImg(ctx, node)
+ 	} else if node.Data == "video" {
+ 		return visitNodeVideo(ctx, node)
++	} else if node.Data == "source" {
++		return visitNodePictureSource(ctx, node)
+ 	}
+ 
+ 	if node.Data == "a" {
+@@ -363,10 +365,11 @@ func visitNode(ctx *RenderContext, procs []processor, node *html.Node) *html.Nod
+ 		// because the content there is not processable, for example: the content is a commit id or a full URL.
+ 		procs = emojiProcessors
+ 	}
++	next := node.NextSibling
+ 	for n := node.FirstChild; n != nil; {
+ 		n = visitNode(ctx, procs, n)
+ 	}
+-	return node.NextSibling
++	return next
+ }
+ 
+ // createKeyword() renders a highlighted version of an action keyword"""
+
+7. 
+File: modules/markup/html_node.go
+Diff:
+"""@@ -6,6 +6,7 @@ package markup
+ import (
+ 	"strings"
+ 
++	"gitea.dev/modules/htmlutil"
+ 	"gitea.dev/modules/markup/common"
+ 
+ 	"golang.org/x/net/html"
+@@ -127,6 +128,10 @@ func processNodeA(ctx *RenderContext, node *html.Node) {
+ 	}
+ }
+ 
++func resolveMediaLinkWithCamo(ctx *RenderContext, link string) string {
++	return camoHandleLink(ctx.RenderHelper.ResolveLink(link, LinkTypeMedia))
++}
++
+ func visitNodeImg(ctx *RenderContext, img *html.Node) (next *html.Node) {
+ 	next = img.NextSibling
+ 	attrSrc, hasLazy := "", false
+@@ -152,19 +157,21 @@ func visitNodeImg(ctx *RenderContext, img *html.Node) (next *html.Node) {
+ 			cnt++
+ 		}
+ 		if isLinkable {
++			linkNode := img
++			if img.Parent.Data == "picture" {
++				linkNode = img.Parent
++			}
+ 			wrapper := &html.Node{Type: html.ElementNode, Data: "a", Attr: []html.Attribute{
+ 				{Key: "href", Val: ctx.RenderHelper.ResolveLink(imgSrcOrigin, LinkTypeDefault)},
+ 				{Key: "target", Val: "_blank"},
+ 			}}
+-			parent := img.Parent
+-			imgNext := img.NextSibling
+-			parent.RemoveChild(img)
+-			parent.InsertBefore(wrapper, imgNext)
+-			wrapper.AppendChild(img)
++			parent := linkNode.Parent
++			linkNext := linkNode.NextSibling
++			parent.RemoveChild(linkNode)
++			parent.InsertBefore(wrapper, linkNext)
++			wrapper.AppendChild(linkNode)
+ 		}
+-
+-		imgAttr.Val = ctx.RenderHelper.ResolveLink(imgSrcOrigin, LinkTypeMedia)
+-		imgAttr.Val = camoHandleLink(imgAttr.Val)
++		imgAttr.Val = resolveMediaLinkWithCamo(ctx, imgSrcOrigin)
+ 		img.Attr[i] = imgAttr
+ 	}
+ 	if !RenderBehaviorForTesting.DisableAdditionalAttributes && !hasLazy && !strings.HasPrefix(attrSrc, "data:") {
+@@ -179,9 +186,24 @@ func visitNodeVideo(ctx *RenderContext, node *html.Node) (next *html.Node) {
+ 		if attr.Key != "src" {
+ 			continue
+ 		}
+-		attr.Val = ctx.RenderHelper.ResolveLink(attr.Val, LinkTypeMedia)
+-		attr.Val = camoHandleLink(attr.Val)
++		attr.Val = resolveMediaLinkWithCamo(ctx, attr.Val)
+ 		node.Attr[i] = attr
+ 	}
+ 	return next
+ }
++
++func visitNodePictureSource(ctx *RenderContext, node *html.Node) (next *html.Node) {
++	next = node.NextSibling
++	for attrIdx, attr := range node.Attr {
++		if attr.Key != "srcset" {
++			continue
++		}
++		srcsetCandidates := htmlutil.ParseSrcset(attr.Val)
++		for i, candidate := range srcsetCandidates {
++			srcsetCandidates[i].SrcLink = resolveMediaLinkWithCamo(ctx, candidate.SrcLink)
++		}
++		attr.Val = htmlutil.EncodeSrcset(srcsetCandidates)
++		node.Attr[attrIdx] = attr
++	}
++	return next
++}"""
+
+8. 
+File: modules/markup/render_link.go
+Diff:
+"""@@ -42,7 +42,7 @@ func resolveLinkRelative(ctx context.Context, base, cur, link string, absolute b
+ 			finalLink += "?" + linkURL.RawQuery
+ 		}
+ 		if linkURL.Fragment != "" {
+-			finalLink += "#" + linkURL.Fragment
++			finalLink += "#" + linkURL.EscapedFragment()
+ 		}
+ 	}
+ """
+
+9. 
+File: modules/markup/render_link_test.go
+Diff:
+"""@@ -20,7 +20,7 @@ func TestResolveLinkRelative(t *testing.T) {
+ 	assert.Equal(t, "/a/c", resolveLinkRelative(ctx, "/a", "b", "/c", false))
+ 	assert.Equal(t, "/a/c#id", resolveLinkRelative(ctx, "/a", "b", "/c#id", false))
+ 	assert.Equal(t, "/a/%2f?k=/", resolveLinkRelative(ctx, "/a", "b", "/%2f/?k=/", false))
+-	assert.Equal(t, "/a/b/c?k=v#id", resolveLinkRelative(ctx, "/a", "b", "c/?k=v#id", false))
++	assert.Equal(t, "/a/b/c?k=v#with%20space", resolveLinkRelative(ctx, "/a", "b", "c/?k=v#with%20space", false))
+ 	assert.Equal(t, "%invalid", resolveLinkRelative(ctx, "/a", "b", "%invalid", false))
+ 	assert.Equal(t, "http://localhost:3000/a", resolveLinkRelative(ctx, "/a", "", "", true))
+ """
+
+## Sentences to Annotate (Separated by Source)
+
+
+The following sentences come from the commit message
+
+Id: 41105169_1_1_0
+Source: COMMIT_MESSAGE
+Sentence: 
+"""fix(markup): resolve and proxy srcset links of <source> elements (#39708)"""
+
+Id: 41105169_1_1_1
+Source: COMMIT_MESSAGE
+Sentence: 
+"""1. use correct links for srcset attribute of picture source"""
+
+Id: 41105169_1_1_2
+Source: COMMIT_MESSAGE
+Sentence: 
+"""2. wrap the picture element with a link correctly"""
+
+Id: 41105169_1_1_3
+Source: COMMIT_MESSAGE
+Sentence: 
+"""---------"""
+
+Id: 41105169_1_1_4
+Source: COMMIT_MESSAGE
+Sentence: 
+"""Co-authored-by: wxiaoguang <wxiaoguang@gmail.com>"""
+
+The following sentences come from the issue: https://github.com/go-gitea/gitea/issues/39761, associated with the commit
+
+Id: 41105169_5_1_0
+Source: ISSUE
+Sentence: 
+"""DEFAULT_SHOW_FULL_NAME is not always respected"""
+
+Id: 41105169_5_2_0
+Source: ISSUE
+Sentence: 
+"""### Gitea Version"""
+
+Id: 41105169_5_2_1
+Source: ISSUE
+Sentence: 
+"""28.1.0"""
+
+Id: 41105169_5_2_2
+Source: ISSUE
+Sentence: 
+"""### What happened?"""
+
+Id: 41105169_5_2_3
+Source: ISSUE
+Sentence: 
+"""https://docs.gitea.com/administration/config-cheat-sheet/#ui-ui > **DEFAULT_SHOW_FULL_NAME**: false: > Whether the full name of the users should be shown where possible."""
+
+Id: 41105169_5_2_4
+Source: ISSUE
+Sentence: 
+"""If the full name isn’t set, the username will be used."""
+
+Id: 41105169_5_2_5
+Source: ISSUE
+Sentence: 
+"""This configuration option is not always respected."""
+
+Id: 41105169_5_2_6
+Source: ISSUE
+Sentence: 
+"""My organization recently migrated to a new authentication source with numeric usernames (e.g. cbss-o14, cbss-o31, ...) and it's now difficult to deduce which person has performed a certain action if the UI only shows the username."""
+
+Id: 41105169_5_2_7
+Source: ISSUE
+Sentence: 
+"""We notice the username instead of full name being used here:"""
+
+Id: 41105169_5_2_8
+Source: ISSUE
+Sentence: 
+"""* @mentions (see also #26579) <img width="150" height="31" alt="Image" src="https://github.com/user-attachments/assets/3e07665f-3c3e-49b2-91a6-f46ebee00ef5" />"""
+
+Id: 41105169_5_2_9
+Source: ISSUE
+Sentence: 
+"""* reactions <img width="102" height="76" alt="Image" src="https://github.com/user-attachments/assets/152c13b2-f5c6-4c9b-bdce-b17642e36dd1" />"""
+
+Id: 41105169_5_2_10
+Source: ISSUE
+Sentence: 
+"""* email notifications <img width="170" height="88" alt="Image" src="https://github.com/user-attachments/assets/33a7f639-7862-4100-8452-db107549807a" />"""
+
+Id: 41105169_5_2_11
+Source: ISSUE
+Sentence: 
+"""Maybe there are more."""
+
+Id: 41105169_5_2_12
+Source: ISSUE
+Sentence: 
+"""### How are you running Gitea?"""
+
+Id: 41105169_5_2_13
+Source: ISSUE
+Sentence: 
+"""_No response_"""
+
+Id: 41105169_5_3_0
+Source: ISSUE
+Sentence: 
+"""Yep, it's a longstanding problem since DEFAULT_SHOW_FULL_NAME was introduced."""
+
+Id: 41105169_5_3_1
+Source: ISSUE
+Sentence: 
+"""#36597 and other PRs have fixed many call sites, while there are still more."""
+
+Id: 41105169_5_3_2
+Source: ISSUE
+Sentence: 
+"""Some TODO comments were also left in code, and the new design should be easy to apply to more call sites."""
+
+Id: 41105169_5_3_3
+Source: ISSUE
+Sentence: 
+"""If you found any, could use the correct "display name" functions to replace them."""
+
+Id: 41105169_5_3_4
+Source: ISSUE
+Sentence: 
+"""https://github.com/go-gitea/gitea/blob/a1cc65126711814fa23b819e7972bd02631715c4/models/user/user.go#L471-L476"""
+
+The following sentences come from the issue: https://github.com/go-gitea/gitea/issues/26579, associated with the commit
+
+Id: 41105169_5_4_0
+Source: ISSUE
+Sentence: 
+"""Render markdown mentions using the full name of the mentioned user"""
+
+Id: 41105169_5_5_0
+Source: ISSUE
+Sentence: 
+"""### Feature Description"""
+
+Id: 41105169_5_5_1
+Source: ISSUE
+Sentence: 
+"""Currently if I mention a user using `@user.name` this will be rendered as [@user.name](?)."""
+
+Id: 41105169_5_5_2
+Source: ISSUE
+Sentence: 
+"""Assuming the `FullName` of the user is set to `User Name`, it would be great to instead render `@user.name` as [User Name](?)."""
+
+Id: 41105169_5_5_3
+Source: ISSUE
+Sentence: 
+"""I assumed this would be done with the `DEFAULT_SHOW_FULL_NAME` option in the `ui` configuration, but (at least based on my testing) it is not."""
+
+Id: 41105169_5_5_4
+Source: ISSUE
+Sentence: 
+"""### Screenshots"""
+
+Id: 41105169_5_5_5
+Source: ISSUE
+Sentence: 
+"""_No response_"""
+
+Id: 41105169_5_6_0
+Source: ISSUE
+Sentence: 
+"""there are other places, where login is used, in other places - full name, https://github.com/go-gitea/gitea/issues/22323"""
+
+Id: 41105169_5_7_0
+Source: ISSUE
+Sentence: 
+"""This would not match GitHub behaviour, so if at all this should be opt-in behind `DEFAULT_SHOW_FULL_NAME`."""
+
+Id: 41105169_5_8_0
+Source: ISSUE
+Sentence: 
+"""@silverwind, I agree, it should be behind `DEFAULT_SHOW_FULL_NAME`"""
+
+The following sentences come from the pull_request: https://github.com/go-gitea/gitea/pull/39708, associated with the commit
+
+Id: 41105169_6_1_0
+Source: PULL_REQUEST
+Sentence: 
+"""fix(markup): resolve and proxy srcset links of <source> elements"""
+
+Id: 41105169_6_2_0
+Source: PULL_REQUEST
+Sentence: 
+"""Gitea's sanitizer allows `media` and `srcset` on `<source>` so the `<picture>` form for dark/light images renders, but the post-processor only visits `img` and `video` nodes, so a `<source>` never reaches the rewriting that `src` gets."""
+
+Id: 41105169_6_2_1
+Source: PULL_REQUEST
+Sentence: 
+"""A relative `srcset="dark.svg"` is then resolved by the browser against the page URL and lands on the HTML file view instead of the media route, so the dark variant never loads."""
+
+Id: 41105169_6_2_2
+Source: PULL_REQUEST
+Sentence: 
+"""With `[camo]` on it matters more: the `<img>` fallback is rewritten to the proxy while the `<source>` candidate is not, and in a `<picture>` the source wins, so a comment holding `<picture><source srcset="http://attacker.example/pixel.png"><img src="..."></picture>` has every reader's browser hit the attacker's host directly and hand over its address and user agent."""
+
+Id: 41105169_6_2_3
+Source: PULL_REQUEST
+Sentence: 
+"""I ran into it wondering why a README's dark image pointed at a `src/branch/...` URL."""
+
+Id: 41105169_6_2_4
+Source: PULL_REQUEST
+Sentence: 
+"""The new `source` visitor sends each `srcset` candidate through the same link resolution and camo handling as `img` and `video`, keeping separators and descriptors so a multi-candidate list survives."""
+
+Id: 41105169_6_2_5
+Source: PULL_REQUEST
+Sentence: 
+"""Assisted-by: Claude Code:claude-opus-5"""
+
+The following sentences come from the pull_request: https://github.com/go-gitea/gitea/pull/36597, associated with the commit
+
+Id: 41105169_6_3_0
+Source: PULL_REQUEST
+Sentence: 
+"""fix(repo): unify DEFAULT_SHOW_FULL_NAME output in templates and dropdown"""
+
+Id: 41105169_6_4_0
+Source: PULL_REQUEST
+Sentence: 
+"""The design of DefaultShowFullName has some problems, which make the UI inconsistent, see the new comment in code"""
+
+Id: 41105169_6_4_1
+Source: PULL_REQUEST
+Sentence: 
+"""This PR does a clean up for various legacy problems, and clarify some "user name display" behaviors."""
+
+Id: 41105169_6_4_2
+Source: PULL_REQUEST
+Sentence: 
+"""New screenshots are in https://github.com/go-gitea/gitea/pull/36597#issuecomment-3996904421"""
+
+Id: 41105169_6_5_0
+Source: PULL_REQUEST
+Sentence: 
+"""## Review"""
+
+Id: 41105169_6_5_1
+Source: PULL_REQUEST
+Sentence: 
+"""Overall the approach is sound — the template change follows the same pattern already used in `latest_commit.tmpl`, `commits_list.tmpl`, and `graph/commits.tmpl`."""
+
+Id: 41105169_6_5_2
+Source: PULL_REQUEST
+Sentence: 
+"""The JS change is logically correct because the backend in `issue_poster.go` only populates `full_name` in the response when `DefaultShowFullName` is enabled, so the `item.full_name` check in JS implicitly gates on the setting."""
+
+Id: 41105169_6_5_3
+Source: PULL_REQUEST
+Sentence: 
+"""However, I see a visual issue:"""
+
+Id: 41105169_6_5_4
+Source: PULL_REQUEST
+Sentence: 
+"""### `search-fullname` class causes dimmed text for the primary display name"""
+
+Id: 41105169_6_5_5
+Source: PULL_REQUEST
+Sentence: 
+"""The `search-fullname` CSS class applies `color: var(--color-text-light-2)` (a lighter/muted text color)."""
+
+Id: 41105169_6_5_6
+Source: PULL_REQUEST
+Sentence: 
+"""Previously this was appropriate because the full name was *secondary* text shown alongside the username."""
+
+Id: 41105169_6_5_7
+Source: PULL_REQUEST
+Sentence: 
+"""But now, when `DefaultShowFullName` is true, the full name is the **only** text displayed — and it will appear in a muted color, while the username path uses the normal text color."""
+
+Id: 41105169_6_5_8
+Source: PULL_REQUEST
+Sentence: 
+"""This creates an inconsistent visual appearance: users with full names will have dimmer display text than users without."""
+
+Id: 41105169_6_5_9
+Source: PULL_REQUEST
+Sentence: 
+"""This affects both the template change and the JS change since both wrap the full name in the `search-fullname` class."""
+
+Id: 41105169_6_5_10
+Source: PULL_REQUEST
+Sentence: 
+"""Consider either:"""
+
+Id: 41105169_6_5_11
+Source: PULL_REQUEST
+Sentence: 
+"""- Removing the `search-fullname` class when the full name is the sole display text, or"""
+
+Id: 41105169_6_5_12
+Source: PULL_REQUEST
+Sentence: 
+"""- Adjusting the CSS so that `search-fullname` only applies the lighter color when it's used as a secondary label (e.g. via a parent selector or an additional modifier class)"""
+
+Id: 41105169_6_5_13
+Source: PULL_REQUEST
+Sentence: 
+"""---"""
+
+Id: 41105169_6_5_14
+Source: PULL_REQUEST
+Sentence: 
+"""*This comment was written by Claude (claude-opus-4-6).*"""
+
+Id: 41105169_6_6_0
+Source: PULL_REQUEST
+Sentence: 
+"""It's still not convenient to only show full name."""
+
+Id: 41105169_6_6_1
+Source: PULL_REQUEST
+Sentence: 
+"""It might be useful to display both."""
+
+Id: 41105169_6_7_0
+Source: PULL_REQUEST
+Sentence: 
+"""> It's still not convenient to only show full name."""
+
+Id: 41105169_6_7_1
+Source: PULL_REQUEST
+Sentence: 
+"""It might be useful to display both."""
+
+Id: 41105169_6_7_2
+Source: PULL_REQUEST
+Sentence: 
+"""How about displaying it on the tooltip? <img width="280" height="296" alt="image" src="https://github.com/user-attachments/assets/de4438d3-fb69-40a7-a66e-11fdd7c6c8a3" />"""
+
+Id: 41105169_6_8_0
+Source: PULL_REQUEST
+Sentence: 
+"""I believe the "DefaultShowFullName" is a wrong design and a lot of old code doesn't do the right thing."""
+
+Id: 41105169_6_8_1
+Source: PULL_REQUEST
+Sentence: 
+"""For most cases, it should show either `username` or `username (Full Name)`"""
+
+Id: 41105169_6_9_0
+Source: PULL_REQUEST
+Sentence: 
+"""It has been changed to display username and full name."""
+
+Id: 41105169_6_9_1
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="277" height="289" alt="image" src="https://github.com/user-attachments/assets/c045d9a7-4cc6-4327-884d-c680924a8da4" />"""
+
+Id: 41105169_6_9_2
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="279" height="325" alt="image" src="https://github.com/user-attachments/assets/08c7e22f-4f96-447e-8fbb-15bffa2acb45" />"""
+
+Id: 41105169_6_10_0
+Source: PULL_REQUEST
+Sentence: 
+"""@tyroneyeh does the new change look good to you and addressed your concern?"""
+
+Id: 41105169_6_10_1
+Source: PULL_REQUEST
+Sentence: 
+"""Screenshots:"""
+
+Id: 41105169_6_10_2
+Source: PULL_REQUEST
+Sentence: 
+"""<details>"""
+
+Id: 41105169_6_10_3
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="840" height="554" alt="image" src="https://github.com/user-attachments/assets/18e15a2c-3f1c-4236-b16e-fe918505267e" />"""
+
+Id: 41105169_6_10_4
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="1118" height="444" alt="image" src="https://github.com/user-attachments/assets/1447f3b0-9f86-4e4f-b4c4-0a6ae65d730d" />"""
+
+Id: 41105169_6_10_5
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="1174" height="572" alt="image" src="https://github.com/user-attachments/assets/69b58cca-e1e2-40f2-b286-332b33dc372c" />"""
+
+Id: 41105169_6_10_6
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="1636" height="566" alt="image" src="https://github.com/user-attachments/assets/e7f66911-7d44-4e97-b46b-038dfbf2a2f2" />"""
+
+Id: 41105169_6_10_7
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="698" height="696" alt="image" src="https://github.com/user-attachments/assets/5764f125-83cb-485b-a0bd-6ee5ecb498ec" />"""
+
+Id: 41105169_6_10_8
+Source: PULL_REQUEST
+Sentence: 
+"""<img width="1322" height="370" alt="image" src="https://github.com/user-attachments/assets/0bb655cd-6c8b-4888-b684-dd1b5cc652f9" />"""
+
+Id: 41105169_6_10_9
+Source: PULL_REQUEST
+Sentence: 
+"""</details>"""
+
+Id: 41105169_6_11_0
+Source: PULL_REQUEST
+Sentence: 
+"""> @tyroneyeh does the new change look good to you and addressed your concern? > > Screenshots: > > Details"""
+
+Id: 41105169_6_11_1
+Source: PULL_REQUEST
+Sentence: 
+"""Yes, look good"""
+
+Id: 41105169_6_11_2
+Source: PULL_REQUEST
+Sentence: 
+"""Thanks"""
+
+The following sentences come from the code_review_comment: https://github.com/go-gitea/gitea/pull/39708, associated with the commit
+
+Id: 41105169_7_1_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Do not re-invent the wheels."""
+
+Id: 41105169_7_1_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`strings.Fields` or `strings.FieldsSeq`"""
+
+Id: 41105169_7_2_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""If you already have PictureSource, don't duplicate the test"""
+
+Id: 41105169_7_3_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Makes sense."""
+
+Id: 41105169_7_3_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Reworked it around strings.FieldsSeq: each field is either a candidate URL or a descriptor, tracked with one flag, and commas at a field's edges still separate candidates so a URL with an embedded comma survives."""
+
+Id: 41105169_7_3_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""The output now normalizes whitespace to single spaces, which seemed fine for rendered HTML."""
+
+Id: 41105169_7_4_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Dropped it."""
+
+Id: 41105169_7_4_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""The PictureSource subtest already covers the wiring end to end and camoHandleLink has its own unit test, so only TestResolveSrcSetLinks stays for the parsing edge cases."""
+
+Id: 41105169_7_5_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""It reads strange."""
+
+Id: 41105169_7_5_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""I will try to refactor it"""
+
+Id: 41105169_7_6_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""OK, the parser is more complicated than it looks, so we still need to handle many details, `strings.Fields` can't help."""
+
+The following sentences come from the code_review_comment: https://github.com/go-gitea/gitea/pull/36597, associated with the commit
+
+Id: 41105169_7_7_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""When `DefaultShowFullName` is true this template always renders `.FullName`, even if it's empty."""
+
+Id: 41105169_7_7_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""That can lead to blank user entries in dropdowns/menus for users without a full name."""
+
+Id: 41105169_7_7_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Other templates typically guard with `and DefaultShowFullName .FullName` to fall back to `.Name` (e.g. `templates/admin/org/list.tmpl:55`, `templates/repo/commits_list.tmpl:20-23`)."""
+
+Id: 41105169_7_7_3
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider using the same pattern here (and only applying the `search-fullname` styling when actually showing the full name). ```suggestion <span class="gt-ellipsis">{{if and DefaultShowFullName .FullName}}<span class="search-fullname">{{.FullName}}</span>{{else}}{{.Name}}{{end}}</span> ```"""
+
+Id: 41105169_7_8_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`item.username` is now concatenated into `nameHtml` as a raw string, which bypasses the escaping behavior provided by the `html` template tag."""
+
+Id: 41105169_7_8_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Even though usernames are currently validated, keeping escaping consistent here helps avoid future regressions and keeps the code’s intent clear; consider rendering the username via `html`/`htmlEscape` as well."""
+
+Id: 41105169_7_9_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Is fullName accidentally swapped with username?"""
+
+Id: 41105169_7_9_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Should it be `def += " (" + fullName + ")"` instead?"""
+
+Id: 41105169_7_10_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""No, see old code"""
+
+Id: 41105169_7_11_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""This handler now always includes `full_name` in the JSON response, whereas previously it was gated by `setting.UI.DefaultShowFullName`."""
+
+Id: 41105169_7_11_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""If the intent is still that full names should only be used/exposed when that setting is enabled (as described in the PR), consider either keeping the server-side gating or returning a single `display_name` field computed from the setting so clients don’t need to infer policy from raw fields."""
+
+Id: 41105169_7_12_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`$commit.User.GetShortDisplayNameLinkHTML` is written as plain text (missing `{{ ... }}`), so it will be rendered literally instead of outputting the link HTML."""
+
+Id: 41105169_7_12_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Wrap it in a template action so the method is executed and its HTML is emitted."""
+
+Id: 41105169_7_13_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`displayName` is now always formatted as `username (Full Name)` when a full name exists, which ignores `DEFAULT_SHOW_FULL_NAME` and contradicts the PR description (show only one value depending on the setting)."""
+
+Id: 41105169_7_13_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider using the same display-name selection logic used elsewhere (e.g. `User.GetDisplayName` semantics) so this dropdown list stays consistent with the rest of the UI."""
+
+Id: 41105169_7_14_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Inside `.username-display` (an `inline-flex` with `gap`), the newline/indentation between the `<a>` and the full-name `<span>` becomes a whitespace text node, which flexbox will treat as an extra flex item—this can cause unexpected extra spacing."""
+
+Id: 41105169_7_14_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Also, the template now always shows `Name (FullName)` regardless of `DEFAULT_SHOW_FULL_NAME`, which doesn’t match the PR description."""
+
+Id: 41105169_7_14_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider emitting only the intended single display value and trimming/removing inter-element whitespace (eg using `{{-` / `-}}` or placing elements adjacent) to avoid the extra flex item. ```suggestion <a href="{{$org.HomeLink}}">{{$org.Name}}</a>{{- if $org.FullName -}}<span class="username-fullname">({{$org.FullName}})</span>{{- end}} ```"""
+
+Id: 41105169_7_15_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""The doc comment still mentions an `isShowFullName` parameter that no longer exists, and the query now *always* ORs in a `full_name LIKE "%<search>%"` condition (leading wildcard)."""
+
+Id: 41105169_7_15_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""That changes behavior vs the old setting-gated search and can be significantly less index-friendly."""
+
+Id: 41105169_7_15_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Please update the comment to reflect the new signature/behavior, and consider whether the full-name contains search should remain unconditional (or be a prefix search / gated behind a flag) to avoid performance regressions on large instances."""
+
+Id: 41105169_7_16_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""The PR description lists only `templates/repo/search_name.tmpl` and `web_src/js/features/repo-issue-list.ts` as affected, but this PR also changes commit-related templates (eg using `GetShortDisplayNameLinkHTML`) which impacts additional UI surfaces."""
+
+Id: 41105169_7_16_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Please update the PR description (and/or scope) so reviewers and release notes accurately capture the extra behavior changes."""
+
+Id: 41105169_7_17_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""This dropdown item rendering always shows `username` and `full_name` together when `full_name` is non-empty."""
+
+Id: 41105169_7_17_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""The PR description says the UI should show only the full name when `DEFAULT_SHOW_FULL_NAME=true`, otherwise only the username."""
+
+Id: 41105169_7_17_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider computing a single `display_name` based on the server-side setting (e.g. include a `display_name` field in the response, or expose the setting in `window.config` and choose between `item.username` and `item.full_name` here) so the dropdown matches the intended behavior."""
+
+Id: 41105169_7_18_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`$userName := .Author.Name` is now only used in the `else` branch (`.User` is nil)."""
+
+Id: 41105169_7_18_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""In the `.User` branch it’s dead code, which makes the template harder to follow."""
+
+Id: 41105169_7_18_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider moving the `$userName` assignment into the `else` branch (or removing it) so only the needed variables are defined."""
+
+Id: 41105169_7_19_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`GetShortDisplayNameLinkHTML` uses `u.FullName` directly for `data-tooltip-content` without trimming, and will emit `data-tooltip-content=""` when the full name is empty/whitespace."""
+
+Id: 41105169_7_19_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider trimming the tooltip content (similar to other name helpers) and omitting the tooltip attribute when there’s nothing meaningful to show to avoid empty/whitespace tooltips."""
+
+Id: 41105169_7_20_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`.username-display` is defined as `inline-flex`, but it’s also used together with `gt-ellipsis` (e.g. in `templates/repo/search_name.tmpl`)."""
+
+Id: 41105169_7_20_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Text-overflow ellipsis generally won’t work as expected on a flex container with multiple flex items (avatar/text/fullname)."""
+
+Id: 41105169_7_20_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider changing the structure so the element carrying `gt-ellipsis` is non-flex (or add a dedicated inner element for truncation) and ensure shrinkability with `min-width: 0` where needed. ```suggestion"""
+
+Id: 41105169_7_20_3
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+""".username-display.gt-ellipsis { display: inline-block; } ```"""
+
+Id: 41105169_7_21_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""The doc comment is now stale: the function no longer takes an `isShowFullName` flag, and full-name matching is always included when `search != ""` (also it’s a substring match via `%search%`, not a prefix match)."""
+
+Id: 41105169_7_21_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Please update the comment to reflect the current behavior/signature. ```suggestion // GetIssuePostersWithSearch returns up to 30 users who have authored an issue or pull request // in the given repository and whose username (prefix match) or full name (case-insensitive // substring match) matches the provided search term when search is not empty. ```"""
+
+Id: 41105169_7_22_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`.username-display` is an `inline-flex` container intended to host `gt-ellipsis` children, but it doesn't set `min-width: 0` (which this codebase uses elsewhere to make ellipsis work in flex contexts)."""
+
+Id: 41105169_7_22_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Without it, the child with `text-overflow: ellipsis` may not shrink/truncate as intended."""
+
+Id: 41105169_7_22_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Add `min-width: 0` to `.username-display` (or to the relevant flex children)."""
+
+Id: 41105169_7_23_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`GetShortDisplayNameLinkHTML` always renders `data-tooltip-content="%s"`, but for users without a full name `displayTooltip` will be empty, leading to an empty tooltip attribute (and potentially blank tooltips)."""
+
+Id: 41105169_7_23_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider only adding `data-tooltip-content` when the tooltip text is non-empty (and/or when it differs from the displayed text). ```suggestion } if displayTooltip == "" || displayTooltip == displayName { return htmlutil.HTMLFormat(`<a class="muted" href="%s">%s</a>`, u.HomeLink(), displayName) } ```"""
+
+Id: 41105169_7_24_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""`data-tooltip-content` is fine."""
+
+Id: 41105169_7_25_0
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Because `.username-display` is `inline-flex` with `gap`, the indentation/newlines between the `<a>` and the full-name `<span>` become whitespace text nodes that are treated as flex items in browsers."""
+
+Id: 41105169_7_25_1
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""This can create unexpected extra spacing."""
+
+Id: 41105169_7_25_2
+Source: CODE_REVIEW_COMMENT
+Sentence: 
+"""Consider trimming whitespace with `{{- ... -}}` or placing the elements adjacent with no intervening whitespace inside the flex container. ```suggestion <span class="username-display"><a href="{{$org.HomeLink}}">{{$org.Name}}</a>{{- if $org.FullName -}}<span class="username-fullname">({{$org.FullName}})</span>{{- end -}}</span> ```"""
+
+# Response Format (CSV)
+
+sentence_id, labels
+<ID1>, "<LABEL1>, ..."
+
+
+# Example for Illustration Purposes
+
+Below, I am providing 2 example commits with the code diff and extracted sentences for that commit with the expected rationale component labels. Use the examples only for learning purposes.
+
+## Diff of the Example Commit 1
+1.
+File: src/main/java/org/junit/rules/ExpectedException.java
+Diff:
+"""@@ -43,8 +43,8 @@
+* public void throwsIllegalArgumentExceptionWithMessageAndCause() {
+* NullPointerException expectedCause = new NullPointerException();
+* thrown.expect(IllegalArgumentException.class);
+- * thrown.expectMessage(&quot;happened?&quot;);
+- * thrown.expectCause(expectedCause);
++ * thrown.expectMessage(&quot;What&quot;);
++ * thrown.expectCause(is(expectedCause));
+* throw new IllegalArgumentException(&quot;What happened?&quot;, cause);
+* }
+* }
+@@ -106,8 +106,12 @@ public void expectMessage(Matcher<String> matcher) {
+expect(hasMessage(matcher));
+}
+
+- public void expectCause(Throwable expectedCause) {
+- expect(causeEquals(expectedCause));
++ /**
++ * Adds {@code matcher} to the list of requirements for the cause of
++ * any thrown exception.
++ */
++ public void expectCause(Matcher<? extends Throwable> expectedCause) {
++ expect(hasCause(expectedCause));
+}
+
+private class ExpectedExceptionStatement extends Statement {
+@@ -147,16 +151,16 @@ public boolean matchesSafely(Throwable item) {
+};
+}
+
+- private Matcher<Throwable> causeEquals(final Throwable expectedCause) {
++ private Matcher<Throwable> hasCause(final Matcher<? extends Throwable> causeMatcher) {
+return new TypeSafeMatcher<Throwable>() {
+- @Override
+- public boolean matchesSafely(Throwable item) {
+- return expectedCause == null ? item.getCause() == null : expectedCause.equals(item.getCause());
+- }
+-
+public void describeTo(Description description) {
+description.appendText("exception with cause ");
+- description.appendText(expectedCause.toString());
++ description.appendDescriptionOf(causeMatcher);
++ }
++
++ @Override
++ public boolean matchesSafely(Throwable item) {
++ return causeMatcher.matches(item.getCause());
+}
+};
+}"""
+
+2.
+File: src/test/java/org/junit/tests/experimental/rules/ExpectedExceptionRuleTest.java
+Diff:
+"""@@ -1,18 +1,21 @@
+package org.junit.tests.experimental.rules;
+
+-import static org.hamcrest.CoreMatchers.any;
+-import static org.junit.Assert.assertThat;
+-import static org.junit.experimental.results.PrintableResult.testResult;
+-import static org.junit.experimental.results.ResultMatchers.hasSingleFailureContaining;
+-import static org.junit.experimental.results.ResultMatchers.isSuccessful;
+-import static org.junit.matchers.JUnitMatchers.both;
++import org.hamcrest.CoreMatchers;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.internal.matchers.TypeSafeMatcher;
+import org.junit.rules.ExpectedException;
+
++import static org.hamcrest.CoreMatchers.any;
++import static org.hamcrest.CoreMatchers.is;
++import static org.junit.Assert.assertThat;
++import static org.junit.experimental.results.PrintableResult.testResult;
++import static org.junit.experimental.results.ResultMatchers.hasSingleFailureContaining;
++import static org.junit.experimental.results.ResultMatchers.isSuccessful;
++import static org.junit.matchers.JUnitMatchers.both;
++
+public class ExpectedExceptionRuleTest {
+public static class HasExpectedException {
+@Rule
+@@ -42,7 +45,7 @@ public void throwsIllegalArgumentExceptionWithCause() {
+
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(expectedCause);
++ thrown.expectCause(is(expectedCause));
+
+throw new IllegalArgumentException("Ack!", expectedCause);
+}
+@@ -51,7 +54,7 @@ public void throwsIllegalArgumentExceptionWithCause() {
+public void throwsIllegalArgumentExceptionWithCauseExplicitlyNull() {
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(null);
++ thrown.expectCause(CoreMatchers.<Throwable>nullValue());
+
+throw new IllegalArgumentException("Ack!");
+}
+@@ -260,7 +263,7 @@ public static class HasWrongCause {
+public void throwWithCause() {
+thrown.expect(IllegalArgumentException.class);
+thrown.expectMessage("Ack!");
+- thrown.expectCause(EXPECTED_CAUSE);
++ thrown.expectCause(is(EXPECTED_CAUSE));
+
+throw new IllegalArgumentException("Ack!", new NullPointerException("an unexpected cause"));
+}"""
+
+## Sentences of the Example Commit 1 (Separated by Source).
+
+The sentences we have already labeled are shown with their corresponding labels. Sentences without any labels (i.e., those that do not contain rationale information) have empty labels.
+
+The following sentences come from the commit message:
+
+Id: 756_1_1_0
+Source: COMMIT_MESSAGE
+Sentence:
+"""changed the expectedCause() method to accept a Matcher instead of an explicit Throwable and made some documentation changes"""
+Label: GOAL
+
+The following sentences come from the Javadoc comments of the class(src/main/java/org/junit/rules/ExpectedException.java#ExpectedException) that were changed:
+
+Id: 756_3_5_0
+Source: CLASS_JAVADOCS
+Sentence:
+"""The ExpectedException Rule allows in-test specification of expected exception types and messages: <pre> // These tests all pass."""
+Label:
+
+Id: 756_3_2_0
+Source: CLASS_JAVADOCS
+Sentence:
+"""thrown.expectMessage(&quot;What&quot;); thrown.expectCause(is(expectedCause));"""
+Label:
+Reason: This sentence contains source code that checks the exception class's cause and messages during testing. It is unrelated to the target code change. It doesn‚Äôt describe what changes were made or why, nor does it propose alternative solutions to the current implementation. Therefore, it is not labeled as GOAL, NEED, or ALTERNATIVES.
+
+The following sentences come from the Javadoc comments of the method(src/main/java/org/junit/rules/ExpectedException.java#expectCause) that were changed
+
+Id: 756_4_28_0
+Source: METHOD_JAVADOCS
+Sentence:
+"""Adds {@code matcher} to the list of requirements for the cause of any thrown exception."""
+Label: GOAL
+
+The following sentences come from the pull_request: https://github.com/junit-team/junit4/pull/377, associated with the commit
+
+Id: 756_6_7_0
+Source: PULL_REQUEST
+Sentence:
+"""Enable ExpectedException to match causes more easily"""
+Label: NEED
+
+Id: 756_6_8_0
+Source: PULL_REQUEST
+Sentence:
+"""When working especially with third-party libraries, it's common to deal with checked exceptions in a way similar to this:
+
+``` java
+try {
+collaborator.something();
+}
+catch (CheckedException e) {
+throw new MyRuntimeException("failed to do something", e);
+}
+```
+
+It's common for different instances of MyRuntimeException to be thrown from many possible execution branches, so when testing this, I would like to do something like:
+
+``` java
+@Rule
+ExpectedException thrown= ExpectedException.none();
+
+@Test
+public void aTest() throws Exception {
+CheckedException expected = new CheckedException("expected");
+
+Mockito.when(collaborator.something()).thenThrow(expected);
+
+thrown.expect(MyRuntimeException.class);
+thrown.expectMessage("failed to do something");
+thrown.expectCause(expected);
+
+myObject.method();
+}"""
+Label: 
+
+Id: 756_6_8_4
+Source: PULL_REQUEST
+Sentence:
+"""I realise you can do that with a custom matcher as well, but it feels like this is (at least nearly) as fundamental as matching on the message, so it should perhaps be a part of the core framework?"""
+Label: ALTERNATIVES, NEED
+
+Id: 756_6_9_1
+Source: PULL_REQUEST
+Sentence:
+"""One concern I have is that many custom exceptions don't have well-defined equals() methods."""
+Label:
+
+Id: 756_6_9_2
+Source: PULL_REQUEST
+Sentence:
+"""What about one of these ideas:
+
+thrown.expectCause(instanceOf(CheckedException.class));
+
+Or, trickier:
+
+thrown.onCause().expectMessage("failed to do something"), where onCause() returns an ExpectedException itself (haven't thought about how hard this would be)."""
+Label: ALTERNATIVES
+
+Id: 756_6_10_0
+Source: PULL_REQUEST
+Sentence:
+"""Hm, in the initial implementation, I actually didn't check equals but ==."""
+Label:
+
+Id: 756_6_10_1
+Source: PULL_REQUEST
+Sentence:
+"""I can't remember why I changed it now, but using == feels a little better in some ways - I can't think of a scenario where some code would want to do for instance a clone of an exception that was thrown, and wrapping it in another cause would require the comparison to be recursive."""
+Label:
+
+Id: 756_6_11_1
+Source: PULL_REQUEST
+Sentence:
+"""I still think that having expectCause take a Matcher means more flexibility for everyone."""
+Label: NEED
+
+Id: 756_6_11_2
+Source: PULL_REQUEST
+Sentence:
+"""Developers can use thrown.expectCause(is(expected)) when they want the exact exception, and other matchers when they want something more generic."""
+Label: NEED
+
+## Diff of the Example Commit 2
+1.
+File: src/main/java/org/junit/rules/TemporaryFolder.java
+Diff:
+"""@@ -61,13 +61,19 @@ public Result invoke(Invocation invocation) throws RpcException {\n asyncResult.get(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);\n }\n } catch (InterruptedException e) {\n- throw new RpcException(\"Interrupted unexpectedly while waiting for remoting result to return! method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(\"Interrupted unexpectedly while waiting for remote result to return! method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n } catch (ExecutionException e) {\n Throwable t = e.getCause();\n if (t instanceof TimeoutException) {\n- throw new RpcException(RpcException.TIMEOUT_EXCEPTION, \"Invoke remote method timeout. method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(RpcException.TIMEOUT_EXCEPTION, \"Invoke remote method timeout. method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n } else if (t instanceof RemotingException) {\n- throw new RpcException(RpcException.NETWORK_EXCEPTION, \"Failed to invoke remote method: \" + invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ throw new RpcException(RpcException.NETWORK_EXCEPTION, \"Failed to invoke remote method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n+ } else {\n+ throw new RpcException(RpcException.UNKNOWN_EXCEPTION, \"Fail to invoke remote method: \" +\n+ invocation.getMethodName() + \", provider: \" + getUrl() + \", cause: \" + e.getMessage(), e);\n }\n } catch (Throwable e) {\n throw new RpcException(e.getMessage(), e);"""
+
+
+## Sentences of the Example Commit 2 (Separated by Source).
+
+The sentences we have already labeled are shown with their corresponding labels. Sentences without any labels (i.e., those that do not contain rationale information) have empty labels.
+
+The following sentences come from the commit message
+
+Id: 2653_1_1_0
+Source: COMMIT_MESSAGE
+Sentence:
+"""throw unknown exception (#5849)"""
+Label: GOAL
+
+The following sentences come from the comments of the changed code.
+
+Id: 2653_2_40_0
+Source: CODE_COMMENT
+Sentence: 
+"""NOTICE! must call {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} because {@link java.util.concurrent.CompletableFuture#get()} was proved to have serious performance drop."""
+Label:
+
+The following sentences come from the pull request: https://github.com/apache/dubbo/pull/5849, associated with the commit
+
+
+Id: 2653_6_4_0
+Source: PULL_REQUEST
+Sentence:
+"""In `AsyncToSyncInvoker`, when `ExecutionException` happens, only `TimeoutException` and `RemotingException` are handled and wrapped as `RpcException` and re-throw."""
+Label: NEED
+
+Id: 2653_6_4_1
+Source: PULL_REQUEST
+Sentence:
+"""The problem here is other exception will be swallowed silently."""
+Label: NEED
+
+Id: 2653_6_11_0
+Source: PULL_REQUEST
+Sentence:
+"""fix #5855"""
+Label:
+
+Id: 2653_6_4_3
+Source: PULL_REQUEST
+Sentence:
+""""wrap other exception in `RpcException` and rethrow."""
+Label: GOAL

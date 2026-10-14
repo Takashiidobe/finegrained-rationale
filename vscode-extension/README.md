@@ -21,6 +21,11 @@ analyzes those commits and the code. Selected code must be committed, and the
 repository's `origin` must point to GitHub for Rationale to pick up artifacts
 related to the code.
 
+To reopen saved rationale, right-click its Markdown file under `.rationale/` in
+Explorer, or right-click the open editor or its tab, and choose **Rationale:
+Open in Visualizer**. The visualizer reads the current Markdown, including your
+edits.
+
 ## Configuration
 
 Run **Rationale: Configure** from the Command Palette. Provide an API Key from
@@ -51,6 +56,17 @@ error from the output channel and create a [new issue]
 
 ## Settings
 
+Set the commit limit in VS Code Settings or your `settings.json`:
+
+```json
+{
+  "rationale.maxCommits": 5
+}
+```
+
+- `rationale.maxCommits`: Maximum commits analyzed for selected code, ranked by
+  the number of selected lines attributed to each commit; defaults to `3`, with
+  a minimum of `1`. Searching by a specific commit analyzes that commit only.
 - `rationale.runs`: Number of rationale identification runs; defaults to `1`.
 - `rationale.uvPath`: Optional path to an installed `uv` executable, useful if
   Rationale cannot download its bundled copy.

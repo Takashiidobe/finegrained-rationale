@@ -24,7 +24,13 @@ function escapeMarkdown(value: string): string {
   return value.replace(/\s+/g, " ").trim().replace(/[\\`*_{}\[\]<>#|&]/g, "\\$&");
 }
 
-export function referenceLabel(source: string): string {
+export function referenceLabel(source: string, url?: string): string {
+  if (url) {
+    try {
+      const match = new URL(url).pathname.match(/^\/[^/]+\/[^/]+\/(issues|pull)\/(\d+)(?:\/|$)/);
+      if (match) return `${match[1] === "issues" ? "Issue" : "PR"} #${match[2]}`;
+    } catch {}
+  }
   const label = source.toLowerCase().replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
@@ -62,28 +68,23 @@ export function formatRationale(summary: RationaleSummary): {
     return existing.number;
   };
   for (const label of RATIONALE_COMPONENTS) {
-    let cited = false;
-    components[label] = (summary.components?.[label] || "").replace(/\[\^([^\]\r\n]+)\]/g, (_, id: string) => {
+    const resolved = (summary.components?.[label] || "").replace(/\[\^([^\]\r\n]+)\]/g, (_, id: string) => {
       const reference = byId.get(id);
       if (!reference || !reference.labels.includes(label)) return "";
-      cited = true;
-      return `[^${useReference(reference)}]`;
-    }).replace(/\]\[\^/g, "], [^").trim();
-    sections.push(`## ${label === "ALTERNATIVES" ? "ALTERNATIVE" : label}`, "", components[label] || "Not identified.", "");
-    if (components[label] && !cited) {
-      const numbers = [...new Set(available.filter(reference => reference.labels.includes(label)).map(useReference))];
-      if (numbers.length) {
-        evidence[label] = numbers;
-        sections.push(`ARGUS ${label} evidence: ${numbers.map(number => `[^${number}]`).join(" ")}`, "");
-      }
-    }
+      return `[^${id}]`;
+    }).replace(/[ \t]+(?=\[\^)/g, "").replace(/\]\[\^/g, "], [^").trim();
+    const claims = (resolved.match(/[\s\S]+?(?:[.!?](?:\[\^[^\]\r\n]+\])*(?=\s|$)|$)/g) || []).filter(claim => claim.trim());
+    components[label] = claims.length && claims.every(claim => /\[\^[^\]\r\n]+\]/.test(claim))
+      ? resolved.replace(/\[\^([^\]\r\n]+)\]/g, (_, id: string) => `[^${useReference(byId.get(id)!)}]`)
+      : "No evidence found.";
+    sections.push(`## ${label === "ALTERNATIVES" ? "ALTERNATIVE" : label}`, "", components[label], "");
   }
   const references = [...numbered.values()];
   if (references.length) {
     sections.push("## References", "");
     for (const reference of references) {
       const url = new URL(reference.url).toString().replace(/</g, "%3C").replace(/>/g, "%3E");
-      sections.push(`[^${reference.number}]: [${escapeMarkdown(referenceLabel(reference.source))}](<${url}>) — “${escapeMarkdown(reference.sentence)}”`, "");
+      sections.push(`[^${reference.number}]: [${escapeMarkdown(referenceLabel(reference.source, reference.url))}](<${url}>) — “${escapeMarkdown(reference.sentence)}”`, "");
     }
   }
   return { components, references, evidence, markdown: sections.join("\n") };

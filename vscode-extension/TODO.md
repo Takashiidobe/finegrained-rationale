@@ -36,4 +36,4 @@ Alternative is to open vs code with
        related work, use up whitespace more and zoom into and use less
        background for vs code
 
-10. [ ] Rename to ARGUS for VS Code
+10. [x] Rename to ARGUS for VS Code

@@ -12,7 +12,7 @@ test('packaged extension points to the frontend and bundles its one-shot Python 
   for (const script of ['artifact_retrieval.py', 'rationale_sentence_identifier.py', 'rationale_generation.py', 'rationale_sources.py', 'llm_provider.py']) {
     assert.ok(fs.existsSync(path.join(root, 'python', 'scripts', 'ARGUS', script)));
   }
-  for (const file of ['prompts/commit-rationale.md', 'prompts/selection-rationale.md', 'prompts/citations.md', 'pyproject.toml', 'uv.lock', 'scripts/ARGUS/runner.py', 'scripts/ARGUS/cli_selftest.py', 'scripts/ARGUS/sentence_splitter.py']) {
+  for (const file of ['prompts/commit-rationale.md', 'prompts/evidence-identification.md', 'prompts/selection-rationale.md', 'prompts/citations.md', 'pyproject.toml', 'uv.lock', 'scripts/ARGUS/runner.py', 'scripts/ARGUS/cli_selftest.py', 'scripts/ARGUS/sentence_splitter.py']) {
     assert.ok(fs.existsSync(path.join(root, 'python', file)), file);
   }
 });

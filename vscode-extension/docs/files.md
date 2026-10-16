@@ -7,7 +7,7 @@ each model prompt is defined. For the runtime sequence, see `architecture.md`.
 
 The frontend source is under `frontend/src`. The Python files under
 `../scripts/ARGUS` are the source for the bundled ARGUS pipeline; `build.js`
-copies them and their data files into the extension package.
+copies them and the markdown prompts into the extension package.
 
 | File                                      | Responsibility                                                                                                               |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -28,7 +28,7 @@ copies them and their data files into the extension package.
 | `llm_provider.py`                         | Routes prompts to the selected API provider or local CLI.                                                                    |
 | `runner.py`                               | Runs a pipeline script and emits structured error details for the frontend.                                                  |
 | `sentence_splitter.py` and `csv_utils.py` | Shared sentence parsing and CSV read/write helpers.                                                                          |
-| `build.js`                                | Copies ARGUS sources, prompt data, and backend dependencies into the extension package.                                      |
+| `build.js`                                | Copies ARGUS sources, markdown prompts, and backend dependencies into the extension package.                                 |
 
 ## Find the prompts
 
@@ -36,10 +36,9 @@ Commit and selected-code analysis share the first three prompts. Selected-code
 analysis adds a synthesis prompt. Each is assembled with run-specific input.
 
 - **Connection check:** `cli_selftest.py` - `Reply with the single word OK.`
-- **Evidence identification:** `CI-FS` in `CIPromptTemplate.csv`; built by
-  `rationale_sentence_identifier.py` with `AnnotationCodebook.csv`. Labels
-  artifact sentences.
-- **Per-commit rationale:** `CG-FS` in `CGPromptTemplate.csv`; built by
+- **Evidence identification:** `prompts/evidence-identification.md`; built by
+  `rationale_sentence_identifier.py`. Labels artifact sentences.
+- **Per-commit rationale:** `prompts/commit-rationale.md`; built by
   `rationale_generation.py` with citation rules from `rationale_sources.py`.
   Summarizes diff and evidence.
 - **Selected-code synthesis:** built by `selection_synthesis.py` with citation

@@ -12,10 +12,6 @@ from artifact_retrieval import DEFAULT_OUTPUT_ROOT, get_commit_output_dir, resol
 from rationale_sentence_identifier import ensure_artifacts_file, identify_rationale_sentences
 
 
-SOURCE_ROOT = Path(__file__).resolve().parents[2]
-CG_TEMPLATE_PATH = SOURCE_ROOT / "data" / "CGPromptTemplate.csv"
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate rationale summaries for a single commit's identified ARGUS rationale sentences."
@@ -39,11 +35,6 @@ def parse_args() -> argparse.Namespace:
         default="o4-mini",
         help="OpenAI model used for rationale generation.",
     )
-    parser.add_argument(
-        "--prompt-strategy",
-        default="commit",
-        help="Use commit for the application prompt, or a research strategy from data/CGPromptTemplate.csv.",
-    )
     return parser.parse_args()
 
 
@@ -64,7 +55,6 @@ def main() -> None:
         identified_path=identified_path,
         output_dir=output_dir,
         model_name=args.model,
-        prompt_strategy=args.prompt_strategy,
     )
     print(f"Rationale summary saved to {summary_path}")
 
@@ -110,7 +100,6 @@ def ensure_pipeline_inputs(
         output_dir=output_dir,
         model_name="o4-mini",
         runs=1,
-        prompt_strategy="CI-FS",
     )
     return Path(artifacts_path), identified_path
 
@@ -120,12 +109,11 @@ def generate_rationale_summary(
     identified_path: Path,
     output_dir: Path,
     model_name: str,
-    prompt_strategy: str,
 ) -> Path:
     artifacts = read_json(artifacts_path)
     identified_rows = read_csv_rows(identified_path)
 
-    prompt = build_generation_prompt(artifacts, identified_rows, prompt_strategy)
+    prompt = build_generation_prompt(artifacts, identified_rows)
     (output_dir / "rationale_generation_prompt.txt").write_text(prompt, encoding="utf-8")
 
     references = build_references(identified_rows)
@@ -139,7 +127,6 @@ def generate_rationale_summary(
         "commit_id": artifacts["commit_id"],
         "commit_url": artifacts["commit_url"],
         "model": model_name,
-        "prompt_strategy": prompt_strategy,
         "raw_response": response_text,
         "components": parsed_components,
         "references": references,
@@ -155,51 +142,19 @@ def generate_rationale_summary(
 def build_generation_prompt(
     artifacts: dict[str, Any],
     identified_rows: list[dict[str, Any]],
-    prompt_strategy: str,
 ) -> str:
-    if prompt_strategy == "commit":
-        code_diff_information = "\n\n".join(
-            f"File: {file_info.get('filename', '')}\nDiff:\n{file_info.get('patch') or '<patch unavailable>'}"
-            for file_info in artifacts["commit_info"].get("files", [])
-        )
-        sentences_information = format_identified_sentences_for_prompt(
-            "Id: <index>\nSource: <source>\nSentence: <sentence>\nLabels: <labels>", identified_rows,
-        )
-        return render_prompt(
-            "commit-rationale.md", project_name=f"{artifacts['owner']}/{artifacts['repo']}",
-            code_diff_information=code_diff_information, sentences_information=sentences_information,
-            citation_instructions=citation_instructions(build_references(identified_rows)),
-        )
-    template_row = next(
-        (row for row in read_csv_rows(CG_TEMPLATE_PATH) if row["prompt_strategy"] == prompt_strategy),
-        None,
-    )
-    if template_row is None:
-        raise ValueError(f"Prompt strategy not found: {prompt_strategy}")
-    row = template_row
-
     code_diff_information = "\n\n".join(
-        row["code_diff_information"]
-        .replace("<index>", str(index + 1))
-        .replace("<file_name>", file_info.get("filename", ""))
-        .replace("<diff>", file_info.get("patch") or "<patch unavailable>")
-        for index, file_info in enumerate(artifacts["commit_info"].get("files", []))
+        f"File: {file_info.get('filename', '')}\nDiff:\n{file_info.get('patch') or '<patch unavailable>'}"
+        for file_info in artifacts["commit_info"].get("files", [])
     )
-
     sentences_information = format_identified_sentences_for_prompt(
-        row["sentences_information"],
-        identified_rows,
+        "Id: <index>\nSource: <source>\nSentence: <sentence>\nLabels: <labels>", identified_rows,
     )
-
-    project_name = f"{artifacts['owner']}/{artifacts['repo']}"
-    return (
-        row["template"]
-        .replace("<project_name>", project_name)
-        .replace("<code_diff_information>", code_diff_information)
-        .replace("<sentences_information>", sentences_information)
-        .replace("<sentence_count>", str(len(identified_rows)))
-    ) + citation_instructions(build_references(identified_rows))
-
+    return render_prompt(
+        "commit-rationale.md", project_name=f"{artifacts['owner']}/{artifacts['repo']}",
+        code_diff_information=code_diff_information, sentences_information=sentences_information,
+        citation_instructions=citation_instructions(build_references(identified_rows)),
+    )
 
 def format_identified_sentences_for_prompt(template: str, rows: list[dict[str, Any]]) -> str:
     aliases = citation_aliases(build_references(rows))

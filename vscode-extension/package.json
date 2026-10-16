@@ -2,7 +2,7 @@
   "name": "argus-rationale",
   "displayName": "ARGUS for VS Code",
   "description": "Generate rationale for a GitHub commit.",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "publisher": "SEALab",
   "repository": {
     "type": "git",

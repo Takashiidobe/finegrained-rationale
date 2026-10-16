@@ -16,7 +16,7 @@ Alternative is to open vs code with
 
    In the settings now, rationale.maxCommits.
 
-3. [ ] Need to evaluate the prompts. Prompt currently makes up justification
+3. [x] Need to evaluate the prompts. Prompt currently makes up justification
        when it shouldn't for highlighted text
 
 4. [x] Sentence references should be inline

@@ -183,23 +183,6 @@ Default:
 3
 ```
 
-#### `--prompt-strategy`
-
-Used by:
-
-- `rationale_sentence_identifier.py`
-- `rationale_generation.py`
-
-This selects a prompt template from:
-
-- `data/CIPromptTemplate.csv`
-- `data/CGPromptTemplate.csv`
-
-Defaults:
-
-- identification: `CI-FS`
-- generation: `CG-FS`
-
 ## Environment Requirements
 
 You need:
@@ -492,7 +475,6 @@ Schema:
   "commit_id": 42645850,
   "commit_url": "https://github.com/<owner>/<repo>/commit/<sha>",
   "model": "o4-mini",
-  "prompt_strategy": "CG-FS",
   "raw_response": "GOAL: ...\nNEED: ...",
   "components": {
     "GOAL": "...",

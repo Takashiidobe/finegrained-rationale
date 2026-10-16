@@ -6,8 +6,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from csv_utils import read_csv_rows, write_csv_rows
+from csv_utils import write_csv_rows
 from llm_provider import generate_text
+from rationale_sources import render_prompt
 from sentence_splitter import split_sentences
 from artifact_retrieval import (
     DEFAULT_OUTPUT_ROOT,
@@ -18,9 +19,6 @@ from artifact_retrieval import (
 )
 
 
-SOURCE_ROOT = Path(__file__).resolve().parents[2]
-CODEBOOK_PATH = SOURCE_ROOT / "data" / "AnnotationCodebook.csv"
-CI_TEMPLATE_PATH = SOURCE_ROOT / "data" / "CIPromptTemplate.csv"
 SOURCE_ID_MAP = {
     "COMMIT_MESSAGE": 1,
     "CODE_COMMENT": 2,
@@ -58,11 +56,6 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Number of LLM runs used for majority voting.",
     )
-    parser.add_argument(
-        "--prompt-strategy",
-        default="CI-FS",
-        help="Prompt strategy name from data/CIPromptTemplate.csv.",
-    )
     return parser.parse_args()
 
 
@@ -82,7 +75,6 @@ def main() -> None:
         output_dir=output_dir,
         model_name=args.model,
         runs=args.runs,
-        prompt_strategy=args.prompt_strategy,
     )
     print(f"Identified rationale sentences saved to {identified_path}")
 
@@ -111,7 +103,6 @@ def identify_rationale_sentences(
     output_dir: Path,
     model_name: str,
     runs: int,
-    prompt_strategy: str,
 ) -> Path:
     payload = read_json(artifacts_path)
     sentences = build_sentence_rows(payload)
@@ -119,7 +110,7 @@ def identify_rationale_sentences(
     write_csv_rows(sentences_csv_path, sentences)
     write_json(output_dir / "sentences.json", sentences)
 
-    prompt = build_identification_prompt(payload, sentences, prompt_strategy)
+    prompt = build_identification_prompt(payload, sentences)
     prompt_path = output_dir / "identification_prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
 
@@ -326,49 +317,19 @@ def filter_issue_body(text: str) -> str:
 def build_identification_prompt(
     payload: dict[str, Any],
     sentences: list[dict[str, Any]],
-    prompt_strategy: str,
 ) -> str:
-    template_row = next(
-        (row for row in read_csv_rows(CI_TEMPLATE_PATH) if row["prompt_strategy"] == prompt_strategy),
-        None,
-    )
-    if template_row is None:
-        raise ValueError(f"Prompt strategy not found: {prompt_strategy}")
-    row = template_row
-    template = row["template"]
-
-    codebook = [
-        row for row in read_csv_rows(CODEBOOK_PATH)
-        if row["Annotation Labels"] in RATIONALE_CODES
-    ]
-
-    code_information = "\n\n".join(
-        row["code_information"]
-        .replace("<index>", str(index + 1))
-        .replace("<code>", code_row["Annotation Labels"])
-        .replace("<definintion>", str(code_row["Description"]))
-        .replace("<question>", str(code_row["Component Expressed as Question"]))
-        .replace("<rule>", str(code_row.get("Rules", "")))
-        for index, code_row in enumerate(codebook)
-    )
-
     code_diff_information = "\n\n".join(
-        row["code_diff_information"]
-        .replace("<index>", str(index + 1))
-        .replace("<file_name>", file_info.get("filename", ""))
-        .replace("<diff>", file_info.get("patch") or "<patch unavailable>")
-        for index, file_info in enumerate(payload["commit_info"].get("files", []))
+        f"File: {file_info.get('filename', '')}\nDiff:\n{file_info.get('patch') or '<patch unavailable>'}"
+        for file_info in payload["commit_info"].get("files", [])
     )
-
-    sentences_information = format_sentences_for_prompt(row["sentences_information"], sentences)
-    project_name = f"{payload['owner']}/{payload['repo']}"
-
-    return (
-        template.replace("<project_name>", project_name)
-        .replace("<code_information>", code_information)
-        .replace("<code_diff_information>", code_diff_information)
-        .replace("<sentences_information>", sentences_information)
-        .replace("<sentence_count>", str(len(sentences)))
+    sentences_information = format_sentences_for_prompt(
+        "Id: <index>\nSource: <source>\nSentence: <sentence>", sentences,
+    )
+    return render_prompt(
+        "evidence-identification.md",
+        project_name=f"{payload['owner']}/{payload['repo']}",
+        code_diff_information=code_diff_information,
+        sentences_information=sentences_information,
     )
 
 

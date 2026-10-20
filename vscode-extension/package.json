@@ -2,7 +2,7 @@
   "name": "argus-rationale",
   "displayName": "ARGUS for VS Code",
   "description": "Generate rationale for a GitHub commit.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "SEALab",
   "repository": {
     "type": "git",
@@ -69,7 +69,7 @@
         {
           "command": "rationale.explainSelection",
           "when": "editorHasSelection && !editorReadonly",
-          "group": "naviga{tion@10"
+          "group": "navigation@10"
         }
       ]
     },

@@ -118,6 +118,28 @@ export class BackendClient implements vscode.Disposable {
     }
   }
 
+  async findExistingSelectionRationale(filePath: string, startLine: number, endLine: number): Promise<string | undefined> {
+    const { rationaleFile } = await this.resolveSelectionTarget(filePath, startLine, endLine);
+    try {
+      await fs.access(rationaleFile);
+      return rationaleFile;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async resolveSelectionTarget(filePath: string, startLine: number, endLine: number) {
+    const repoRoot = (await this.capture("git", ["-C", path.dirname(filePath), "rev-parse", "--show-toplevel"])).trim();
+    const relativeFile = path.relative(repoRoot, filePath);
+    if (relativeFile.startsWith("..") || path.isAbsolute(relativeFile)) throw new Error("The selected file is outside its Git repository.");
+    const remote = (await this.capture("git", ["-C", repoRoot, "config", "--get", "remote.origin.url"])).trim();
+    const github = parseGitHubRemote(remote);
+    if (!github) throw new Error("The repository origin must be a GitHub URL to retrieve commit rationale.");
+    const slug = relativeFile.split(path.sep).join("/").replace(/[^A-Za-z0-9._-]+/g, "_");
+    const rationaleFile = path.join(repoRoot, ".rationale", github.owner, github.repo, `selection-${slug}-${startLine}-${endLine}.md`);
+    return { repoRoot, relativeFile, github, rationaleFile };
+  }
+
   async resolveCommitUrl(input: string): Promise<string> {
     const commitUrl = getGitHubCommitUrl(input);
     if (commitUrl) return commitUrl;
@@ -252,9 +274,7 @@ export class BackendClient implements vscode.Disposable {
 
   async explainSelection(selection: SelectionInput, llm: LlmConfiguration, githubToken?: string): Promise<ExplainResult> {
     const filePath = path.resolve(selection.filePath);
-    const repoRoot = (await this.capture("git", ["-C", path.dirname(filePath), "rev-parse", "--show-toplevel"])).trim();
-    const relativeFile = path.relative(repoRoot, filePath);
-    if (relativeFile.startsWith("..") || path.isAbsolute(relativeFile)) throw new Error("The selected file is outside its Git repository.");
+    const { repoRoot, relativeFile, github, rationaleFile } = await this.resolveSelectionTarget(filePath, selection.startLine, selection.endLine);
     const uncommittedMessage = "The code selection is not fully committed. Rationale only works for committed code.";
     let blame: string;
     try {
@@ -279,9 +299,6 @@ export class BackendClient implements vscode.Disposable {
     const maxCommits = Number.isFinite(configuredMaxCommits) ? Math.max(1, Math.floor(configuredMaxCommits)) : 3;
     const commits = [...counts.entries()].sort((a, b) => b[1] - a[1] || (order.get(a[0])! - order.get(b[0])!)).slice(0, maxCommits);
     if (!commits.length) throw new Error("Git did not find commit history for the selected lines.");
-    const remote = (await this.capture("git", ["-C", repoRoot, "config", "--get", "remote.origin.url"])).trim();
-    const github = parseGitHubRemote(remote);
-    if (!github) throw new Error("The repository origin must be a GitHub URL to retrieve commit rationale.");
     if (llm.mode === "cli") await ensureSupportedCli(llm.provider as CliProvider);
     await this.install();
     const outputRoot = path.join(this.runtimeDir, "results");
@@ -314,7 +331,6 @@ export class BackendClient implements vscode.Disposable {
     const summary = JSON.parse(await fs.readFile(resultPath, "utf8")) as RationaleSummary;
     const rationale = formatRationale(summary);
     const { components, references, evidence } = rationale;
-    const rationaleFile = path.join(repoRoot, ".rationale", github.owner, github.repo, `selection-${createHash("sha256").update(`${relativeFile}:${selection.startLine}:${selection.endLine}`).digest("hex").slice(0, 12)}.md`);
     await fs.mkdir(path.dirname(rationaleFile), { recursive: true });
     await fs.writeFile(rationaleFile, [
       "---", `repository: ${JSON.stringify(`${github.owner}/${github.repo}`)}`, `file: ${JSON.stringify(relativeFile)}`,

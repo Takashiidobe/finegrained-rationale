@@ -144,11 +144,11 @@ def build_generation_prompt(
     identified_rows: list[dict[str, Any]],
 ) -> str:
     code_diff_information = "\n\n".join(
-        f"File: {file_info.get('filename', '')}\nDiff:\n{file_info.get('patch') or '<patch unavailable>'}"
-        for file_info in artifacts["commit_info"].get("files", [])
+        f'{index}. \nFile: {file_info.get("filename", "")}\nDiff:\n"""{file_info.get("patch") or "<patch unavailable>"}"""'
+        for index, file_info in enumerate(artifacts["commit_info"].get("files", []), 1)
     )
     sentences_information = format_identified_sentences_for_prompt(
-        "Id: <index>\nSource: <source>\nSentence: <sentence>\nLabels: <labels>", identified_rows,
+        'Id: <index>\nSource: <source>\nSentence: \n"""<sentence>"""\nLabels: <labels>', identified_rows,
     )
     return render_prompt(
         "commit-rationale.md", project_name=f"{artifacts['owner']}/{artifacts['repo']}",

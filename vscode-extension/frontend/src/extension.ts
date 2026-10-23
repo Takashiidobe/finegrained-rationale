@@ -87,6 +87,20 @@ async function explainSelection(context: vscode.ExtensionContext, backend: Backe
   }
 
   try {
+    const existingRationale = await backend.findExistingSelectionRationale(editor.document.uri.fsPath, startLine + 1, endLine + 1);
+    if (existingRationale) {
+      const choice = await vscode.window.showInformationMessage(
+        "A rationale already exists for this selection.",
+        "Open and edit",
+        "Regenerate",
+      );
+      if (choice === "Open and edit") {
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.file(existingRationale));
+        await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Active, preview: false });
+        return;
+      }
+      if (choice !== "Regenerate") return;
+    }
     const llm = await getLlmConfiguration(context);
     if (llm.mode === "api" && !llm.apiKey) {
       const choice = await vscode.window.showWarningMessage("Configure a provider API key before generating rationale.", "Configure");

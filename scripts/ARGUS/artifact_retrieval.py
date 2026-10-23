@@ -248,13 +248,15 @@ def search_reference_artifacts(
     seen_ids: set[int],
     session: requests.Session,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    query = f"repo:{owner}/{repo} {sha}"
     search_url = f"{GITHUB_API_BASE}/search/issues"
-    payload = github_get(session, search_url, params={"q": query, "per_page": 100})
+    items: list[dict[str, Any]] = []
+    for qualifier in ("is:issue", "is:pr"):
+        query = f"repo:{owner}/{repo} {sha} {qualifier}"
+        items.extend(github_get(session, search_url, params={"q": query, "per_page": 100}).get("items", []))
 
     issue_info: list[dict[str, Any]] = []
     pr_info: list[dict[str, Any]] = []
-    for item in payload.get("items", []):
+    for item in items:
         number = item["number"]
         if number in seen_ids:
             continue

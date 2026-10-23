@@ -319,11 +319,11 @@ def build_identification_prompt(
     sentences: list[dict[str, Any]],
 ) -> str:
     code_diff_information = "\n\n".join(
-        f"File: {file_info.get('filename', '')}\nDiff:\n{file_info.get('patch') or '<patch unavailable>'}"
-        for file_info in payload["commit_info"].get("files", [])
+        f'{index}. \nFile: {file_info.get("filename", "")}\nDiff:\n"""{file_info.get("patch") or "<patch unavailable>"}"""'
+        for index, file_info in enumerate(payload["commit_info"].get("files", []), 1)
     )
     sentences_information = format_sentences_for_prompt(
-        "Id: <index>\nSource: <source>\nSentence: <sentence>", sentences,
+        'Id: <index>\nSource: <source>\nSentence: \n"""<sentence>"""', sentences,
     )
     return render_prompt(
         "evidence-identification.md",
